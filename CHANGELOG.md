@@ -1,5 +1,35 @@
 # 更新日志
 
+## 0.1.1
+
+### 修复
+
+- **设置页不出现**：卡片注册到了 `plugins.item` —— 那是**官方插件**的插槽
+  （list，按 `id` 去重），第三方组合包写了也不显示。改为 `plugins.bundle.config`
+  （keyed，`key` = 组合包包名），这才是 plugin-manager 内核用于第三方组合包的
+  插槽。内核源码依据：`configured = ledger.bundles.has(pkg.name)`，再
+  `renderSlot("plugins.bundle.config", { view: "page" }, { entryKey: pkg.name })`。
+- **染色太重导致界面难看**：
+  1. 用户消息的红竖线跑到窗口最左缘 —— `data-chat-flow-kind` 挂在整列宽的
+     flowItem 上，气泡在内部靠右。删除 `user`/`assistant` 两类。
+  2. 斜杠命令菜单被涂灰 —— 把加号按钮、命令触发器等原生控件所在的槽
+     （`left`/`right`/`dock`/`overlay`）当控件染了。删除 `ctl-toolbar`，
+     控件类只保留 `permission`/`model`/`plan`/`activity`，且只染图标不染文字。
+  3. 满屏饱和色 —— 把颜色写给了行本体，整段摘要被染。改为只染「图标 + 短标签
+     （`[class*="_title"]`，CSS Module 后缀跨构建稳定）」+ 3px 竖条，正文保持原生。
+- 竖条从 2px/55% 加强到 3px/90%（前者在真机上几乎看不见）。
+
+### 新增
+
+- `正文也染色` 开关（默认关），给想要更强效果的场景。
+
+### 测试
+
+- 新增两条**内核契约测试**：按 plugin-manager 的 ledger 匹配逻辑断言本插件
+  会被判定为「已配置」；断言 `bundle.config` 的 key 等于包名、
+  且 `cordis.patch.yml` 的 insert id/name 对得上。
+- 新增 4 条回归护栏，分别锁住上面三个成因与 `colorText` 开关。
+
 ## 0.1.0
 
 首个版本。

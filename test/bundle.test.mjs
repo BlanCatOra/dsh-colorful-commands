@@ -10,6 +10,7 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { readFile } from 'node:fs/promises';
 
 import loadClient from './helpers/load-client.mjs';
 
@@ -208,7 +209,7 @@ test('apply 会把样式表注入 head（首帧就有配色，不等设置到达
   assert.ok(style.textContent.includes('#'), '注入的 CSS 必须含真实色值');
 });
 
-test('设置卡片注册到 plugins.item，id 自有，且能取到文案与草稿面', async () => {
+test('设置卡片注册到 plugins.bundle.config，key 必须是组合包包名', async () => {
   installDocument();
   const client = await loadClient(BASE());
   const scope = makeScope();
@@ -216,11 +217,19 @@ test('设置卡片注册到 plugins.item，id 自有，且能取到文案与草�
 
   client.apply(ctx);
 
-  const card = registrations.find((r) => r.name === 'plugins.item');
-  assert.ok(card, '必须注册到 plugins.item（插件详情页）');
-  assert.equal(card.id, 'colorful-commands', '必须用自有 id');
-  assert.equal(typeof card.label, 'function');
-  assert.ok(typeof card.label() === 'string' && card.label().length > 0, 'label 必须返回文案');
+  // ⚠️ 必须是 plugins.bundle.config（keyed，key = 组合包包名），**不是**
+  // plugins.item（那是**官方插件**的位置，list 槽、按 id 去重）。
+  // 内核：`configured = ledger.bundles.has(pkg.name)`，再
+  // `renderSlot("plugins.bundle.config", { view: "page" }, { entryKey: pkg.name })`。
+  // 第一版注册到了 plugins.item，结果**设置页什么都不显示**。
+  const card = registrations.find((r) => r.name === 'plugins.bundle.config');
+  assert.ok(card, '必须注册到 plugins.bundle.config');
+  assert.equal(card.key, 'dsh-colorful-commands', 'keyed 槽的 key 必须是组合包包名');
+  assert.equal(
+    registrations.filter((r) => r.name === 'plugins.item').length,
+    0,
+    '不得注册到 plugins.item —— 那是官方插件的位置，第三方组合包写了也不显示',
+  );
 
   // inject 面：组件靠它拿数据，缺一项就是真机白屏/功能缺失。
   const face = card.inject();
@@ -270,7 +279,7 @@ test('保存会把草稿写回命名空间（三个字段分别写）', async ()
   const { ctx, registrations } = makeCtx({ forms: makeForms(scope) });
 
   client.apply(ctx);
-  const face = registrations.find((r) => r.name === 'plugins.item').inject();
+  const face = registrations.find((r) => r.name === 'plugins.bundle.config').inject();
 
   // 改一个类别，然后保存。
   face.setDraft((draft) => ({ ...draft, colors: { thinking: { light: '#111111', dark: '#222222' } } }));
@@ -288,7 +297,7 @@ test('保存后 formState 的 dirty 回到 false（按钮不会一直亮着）',
   const scope = makeScope();
   const { ctx, registrations } = makeCtx({ forms: makeForms(scope) });
   client.apply(ctx);
-  const face = registrations.find((r) => r.name === 'plugins.item').inject();
+  const face = registrations.find((r) => r.name === 'plugins.bundle.config').inject();
 
   const snapshotOf = () => {
     let value;
@@ -309,7 +318,7 @@ test('放弃修改会回到基线值', async () => {
   const scope = makeScope();
   const { ctx, registrations } = makeCtx({ forms: makeForms(scope) });
   client.apply(ctx);
-  const face = registrations.find((r) => r.name === 'plugins.item').inject();
+  const face = registrations.find((r) => r.name === 'plugins.bundle.config').inject();
 
   const snapshotOf = () => {
     let value;
@@ -358,7 +367,7 @@ test('设置卡片组件渲染期不抛错（渲染期抛错会让插槽条目�
   const { ctx, registrations } = makeCtx({ forms: makeForms(scope) });
   client.apply(ctx);
 
-  const card = registrations.find((r) => r.name === 'plugins.item');
+  const card = registrations.find((r) => r.name === 'plugins.bundle.config');
   const face = card.inject();
 
   // ⚠️ 不能 `import('../src/settings-card.js')`：那个模块 import 'react'，而 react
@@ -412,7 +421,7 @@ test('summary 视图返回描述文案（插件列表页用）', async () => {
   const scope = makeScope();
   const { ctx, registrations } = makeCtx({ forms: makeForms(scope) });
   client.apply(ctx);
-  const card = registrations.find((r) => r.name === 'plugins.item');
+  const card = registrations.find((r) => r.name === 'plugins.bundle.config');
   const face = card.inject();
 
   // ⚠️ 必须给全套 props：组件把 hook 放在最前面（与官方 settings-subagent 一致，
@@ -455,7 +464,59 @@ test('renderer 没有 slots.inject 时回退到直接 register（旧版兼容）
   };
 
   assert.doesNotThrow(() => client.apply(ctx));
-  const card = registrations.find((r) => r.name === 'plugins.item');
+  const card = registrations.find((r) => r.name === 'plugins.bundle.config');
   assert.ok(card, '没有 slots.inject 时也必须回退注册成功');
   assert.equal(typeof card.__component, 'function');
+});
+
+test('契约：按内核的 ledger 匹配逻辑，本插件必须被判定为"已配置"', async () => {
+  installDocument();
+  const client = await loadClient(BASE());
+  const scope = makeScope();
+  const { ctx, registrations } = makeCtx({ forms: makeForms(scope) });
+  client.apply(ctx);
+
+  // ── 复刻 plugin-manager 内核的匹配逻辑（app.asar 源码逐字照抄）──
+  //   const keysOf = (name) => new Set(ctx.slots.entries(name)
+  //     .flatMap((e) => e.options.key === undefined ? [] : [e.options.key]));
+  //   ledger.bundles = keysOf('plugins.bundle.config');
+  //   configured = ledger.bundles.has(pkg.name)      // ← 用**包名**匹配
+  //   renderSlot('plugins.bundle.config', { view:'page' }, { entryKey: pkg.name })
+  const keysOf = (name) => new Set(
+    registrations
+      .filter((r) => r.name === name)
+      .flatMap((e) => (e.key === undefined ? [] : [e.key])),
+  );
+  const ledgerBundles = keysOf('plugins.bundle.config');
+
+  // profile 里那条 bundle 的包名（与 package.json 的 name 一致）。
+  const pkgName = JSON.parse(
+    await readFile(new URL('../package.json', import.meta.url), 'utf8'),
+  ).name;
+
+  assert.ok(
+    ledgerBundles.has(pkgName),
+    `内核用 ledger.bundles.has(pkg.name) 判断是否渲染配置区。` +
+      `本插件注册的 key 必须在其中，否则设置页**什么都不显示**。` +
+      `实际 keys=${JSON.stringify([...ledgerBundles])}，包名=${pkgName}`,
+  );
+});
+
+test('契约：entryKey 与 cordis.patch.yml 的 insert id 必须对得上', async () => {
+  // row.config 的 key 是 `<包名>#<行 id>`；bundle.config 的 key 是包名。
+  // 两者任一对不上都会让配置区静默不显示，所以这里断言 patch 里的 id 真实存在。
+  const patch = await readFile(new URL('../cordis.patch.yml', import.meta.url), 'utf8');
+  const pkgName = JSON.parse(
+    await readFile(new URL('../package.json', import.meta.url), 'utf8'),
+  ).name;
+
+  assert.ok(patch.includes(`id: ${pkgName}`), 'patch 的 insert id 必须等于包名');
+  assert.ok(patch.includes(`name: ${pkgName}`), 'patch 的 insert name 必须等于包名');
+
+  installDocument();
+  const client = await loadClient(BASE());
+  const { ctx, registrations } = makeCtx({ forms: makeForms(makeScope()) });
+  client.apply(ctx);
+  const card = registrations.find((r) => r.name === 'plugins.bundle.config');
+  assert.equal(card.key, pkgName, 'bundle.config 的 key 必须等于包名');
 });

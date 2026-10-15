@@ -23,9 +23,6 @@ export const SETTINGS_NAMESPACE = 'dsh-colorful-commands';
 /** locale 命名空间（文案字典）。 */
 export const LOCALE_NS = 'settings.colorful-commands';
 
-/** 设置卡片在「插件详情页」里的注册 id（必须自有，复用别人的会顶掉对方）。 */
-export const CARD_ID = 'colorful-commands';
-
 /** 注入样式标签的标识，卸载/HMR 时据此移除。 */
 export const STYLE_TAG_ID = 'dsh-colorful-commands';
 

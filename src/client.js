@@ -30,7 +30,7 @@
  *
  * @module dsh-colorful-commands/client
  */
-import { CARD_ID, LOCALE_NS, PLUGIN_ID, SETTINGS_NAMESPACE, STYLE_TAG_ID } from './constants.js';
+import { LOCALE_NS, PLUGIN_ID, SETTINGS_NAMESPACE, STYLE_TAG_ID } from './constants.js';
 import { dictionaries } from './locale.js';
 import { buildStylesheet, resolveColors } from './css.js';
 import { presetColors } from './palettes.js';
@@ -193,7 +193,7 @@ export function apply(ctx) {
           failures.push({ where, message: String(error?.message ?? error), stack: '' });
         },
       });
-      const offCard = registerCard(ctx, failures, t, face, scope);
+      const offCard = registerCard(ctx, failures, t, face);
 
       return () => {
         try {
@@ -216,26 +216,42 @@ export function apply(ctx) {
 /**
  * 注册设置卡片到「插件详情页」。
  *
- * ⚠️ 插槽名是 `plugins.item`（插件配置卡片），**不是** `settings.section`。
- * 用户路径：侧栏「插件」→ 找到本插件 → 在里面配色。
- * 也**不是** `settings.plugin.item`（内核全库 0 命中，那个名字不存在）。
+ * ## 插槽名（这里曾经写错，导致设置页根本不出现）
  *
- * `id` 必须自有：list 槽的去重键是 id，复用别人的会顶掉对方。
+ * plugin-manager 内核源码里的三个配置插槽，各有明确归属：
+ *
+ * | 插槽 | kind | 归属 |
+ * |---|---|---|
+ * | `plugins.item` | list | **官方插件**，按 `id` 列在「内置插件配置」分组 |
+ * | `plugins.bundle.config` | keyed | **组合包自己的配置**，`key` = 组合包包名 |
+ * | `plugins.row.config` | keyed | 组合包里某一行，`key` = `<包名>#<行 id>` |
+ *
+ * 本插件是 profile 里的**第三方组合包**，所以必须用 `plugins.bundle.config`
+ * 且 `key` 写包名 —— 内核按 `ledger.bundles.has(pkg.name)` 决定是否渲染，
+ * 用 `plugins.item` 会**什么都不显示**（第一版就是这个错误）。
+ *
+ * ⚠️ keyed 槽用 `key:`，list 槽用 `id:`；写错属性名同样静默不显示。
+ * 参考实现（本机已验证可用）：`dsh-connect-workbuddy` 的 `registerCard`。
+ *
+ * ## 时机
+ *
+ * 用 `slots.inject(槽名, cb)` 而不是直接 `register`：`inject` 会**等该插槽被
+ * 声明**再执行回调，避免与 plugin-manager 声明插槽的时机竞争。
  *
  * @param ctx 客户端上下文。
  * @param failures 失败收集器。
  * @param t 文案函数。
  * @param face 设置面。
- * @param scope settings scope（用于提供 SettingsForm 的 state）。
  * @returns disposer。
  */
-function registerCard(ctx, failures, t, face, scope) {
+function registerCard(ctx, failures, t, face) {
+  const SLOT = 'plugins.bundle.config';
   try {
     const register = () => ctx.slots.register({
-      name: 'plugins.item',
-      id: CARD_ID,
-      order: 60,
-      label: () => t('cardTitle'),
+      name: SLOT,
+      // keyed 槽：key 必须是**组合包包名**（内核据此匹配 pkg.name）。
+      key: PLUGIN_ID,
+      priority: 30,
       locale: LOCALE_NS,
       inject: () => ({
         t,
@@ -248,12 +264,8 @@ function registerCard(ctx, failures, t, face, scope) {
       }),
     }, ColorfulCommandsCard);
 
-    // ⚠️ 用 `slots.inject(槽名, cb)` 而不是直接 `register`（官方 settings-subagent
-    // 就是这个写法）：`inject` 会**等该插槽被声明**再执行回调，避免与 plugin-manager
-    // 声明插槽的时机竞争 —— 直接 register 在插槽尚未声明时可能落空。
-    // `inject` 本身可能不存在（旧版 renderer），所以要判类型再调。
     if (typeof ctx.slots.inject === 'function') {
-      return ctx.slots.inject('plugins.item', register);
+      return ctx.slots.inject(SLOT, register);
     }
     return register();
   } catch (error) {

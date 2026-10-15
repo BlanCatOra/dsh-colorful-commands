@@ -290,10 +290,10 @@ test('package.json 的 dsh.client.inject 必须列出服务提供方包', async 
     );
   }
 
-  // plugins.item 插槽由 plugin-manager 声明；不列它插槽可能不存在。
+  // 三个配置插槽都由 plugin-manager 声明；不列它插槽可能不存在。
   assert.ok(
     declared.has('@deepseek-ai/dsh-client-ui-plugin-manager'),
-    '设置卡片注册到 plugins.item，必须列 plugin-manager 保证插槽存在',
+    '设置卡片注册到 plugins.bundle.config，必须列 plugin-manager 保证插槽存在',
   );
 
   // primitives 在前端 boot 的 seed 表里（冻结基座），不需要也不应该进 inject。
