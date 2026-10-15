@@ -1,0 +1,258 @@
+/**
+ * dsh-colorful-commands —— 浏览器侧入口。
+ *
+ * ## 职责
+ *
+ * 1. 读取设置（settings 命名空间）；
+ * 2. 生成并注入样式表；
+ * 3. 启动 DOM 观察器给界面元素打类别标记；
+ * 4. 在「插件详情页」注册设置卡片。
+ *
+ * ## 两条硬规则的落实
+ *
+ * **规则一：`ctx.<service>` 必须出现在本文件导出的 `inject` 里。**
+ * cordis 的 `ctx.<service>` 是代理，服务名没写进 `inject` 会**同步抛**
+ * `cannot get property "X" without inject` → `apply` 抛错 → fiber FAILED →
+ * web boot `throw new Error("web boot: N entry did not activate")` → **整站白屏**，
+ * 且 crash log 只有一行 `<包名>: failed`、没有堆栈。
+ *
+ * 本文件用到的服务与 `inject` 一一对应：
+ * - `ctx.slots` → `"slots"`
+ * - `ctx.locale` → `"locale"`
+ * - `ctx.effect` / `ctx.inject` / `ctx.get` / `ctx.fiber` 是 Context 自带成员，不用声明。
+ *
+ * ⚠️ `configForms` **刻意不写进 `inject`**：命名空间可能晚于 `apply` 到达，
+ * 写进去就变成硬依赖（别人挂了本插件也起不来）。改用 `ctx.get('configForms')`
+ * 安全探测 —— Context 自带方法不受白名单限制，服务没到返回 undefined。
+ *
+ * **规则二：`apply` 绝不允许把异常抛出去。** 每个表面各自 guard，失败只降级、
+ * 只记录（`console.error` + `localStorage`）。详见 `boot-diagnostics.js`。
+ *
+ * @module dsh-colorful-commands/client
+ */
+import { CARD_ID, LOCALE_NS, PLUGIN_ID, SETTINGS_NAMESPACE, STYLE_TAG_ID } from './constants.js';
+import { dictionaries } from './locale.js';
+import { buildStylesheet, resolveColors } from './css.js';
+import { presetColors } from './palettes.js';
+import { createFailures, guard, writeBootReport } from './boot-diagnostics.js';
+import { startObserver } from './dom.js';
+import { ColorfulCommandsCard } from './settings-card.js';
+import { createSettingsFace, readConfig } from './settings-face.js';
+
+/**
+ * 必需服务白名单（cordis fiber inject）。
+ *
+ * 只列本文件真正用到的服务名。多列一项 = 多一个"别人挂了我也起不来"的硬依赖；
+ * 少列一项 = 整站白屏。两侧都要靠静态守卫测试兜住。
+ */
+export const inject = ['slots', 'locale'];
+
+/** 样式标签：注入到 head，卸载时移除。 */
+let styleElement = null;
+
+/**
+ * 把 CSS 写进 head。
+ *
+ * `document` 当**不可信输入**：head 可能被冻结、可能没有 head。全部包 try/catch，
+ * 失败返回 false 表示降级（而不是抛错 —— 抛错会让插槽条目被永久撤销）。
+ *
+ * @param cssText 样式文本。
+ * @returns 是否成功。
+ */
+export function applyStylesheet(cssText) {
+  try {
+    const doc = globalThis.document;
+    if (doc === null || doc === undefined) return false;
+
+    if (cssText === '') {
+      // 空样式 = 关闭着色：移除已有标签。
+      if (styleElement !== null) {
+        styleElement.remove();
+        styleElement = null;
+      }
+      return true;
+    }
+
+    if (styleElement === null) {
+      styleElement = doc.createElement('style');
+      styleElement.dataset.plugin = PLUGIN_ID;
+      styleElement.id = STYLE_TAG_ID;
+      const head = doc.head ?? doc.documentElement;
+      if (head === null || head === undefined) return false;
+      head.appendChild(styleElement);
+    } else if (styleElement.isConnected === false) {
+      // 标签还在引用里、但已被移出文档（head 被重建 / HMR 清理）。继续写它的
+      // textContent 是**静默失效**：样式永远不生效。重新挂回去。
+      const head = doc.head ?? doc.documentElement;
+      if (head === null || head === undefined) return false;
+      head.appendChild(styleElement);
+    }
+    styleElement.textContent = cssText;
+    return true;
+  } catch {
+    // head 冻结 / DOM 被改写：降级为"没有着色"，不影响宿主。
+    return false;
+  }
+}
+
+/**
+ * 由配置生成样式并应用。
+ *
+ * @param config 配置值。
+ * @returns 生成的 CSS 文本。
+ */
+export function renderFromConfig(config) {
+  const { colors, enabled } = resolveColors(config, { presetColors: presetColors(config?.preset) });
+  const css = buildStylesheet(colors, { enabled });
+  applyStylesheet(css);
+  return css;
+}
+
+/**
+ * 浏览器侧插件体。
+ *
+ * @param ctx 客户端 cordis 上下文。
+ */
+export function apply(ctx) {
+  const failures = createFailures();
+
+  /** 当前配置（scope 未就绪时用默认值，保证首帧也有配色）。 */
+  let current = { enabled: true, preset: 'chinese', colors: {} };
+
+  // ── 1. locale 字典 ──────────────────────────────────────────────
+  guard(failures, 'locale', () => {
+    ctx.effect(() => ctx.locale.register(LOCALE_NS, dictionaries), `${PLUGIN_ID}: dictionaries`);
+  });
+  const t = guard(failures, 'locale-bind', () => ctx.locale.bind(LOCALE_NS))
+    ?? ((key) => key);
+
+  // ── 2. 首帧着色（不等设置到达，避免闪一下原生配色） ──────────────
+  guard(failures, 'first-paint', () => {
+    renderFromConfig(current);
+  });
+
+  // ── 3. DOM 观察器 ───────────────────────────────────────────────
+  guard(failures, 'dom-observer', () => {
+    const stop = startObserver({
+      onError: (where, error) => {
+        failures.push({ where, message: String(error?.message ?? error), stack: '' });
+      },
+    });
+    ctx.effect(() => stop, `${PLUGIN_ID}: dom observer`);
+  });
+
+  // ── 4. 设置：绑定命名空间并跟随变化 ─────────────────────────────
+  guard(failures, 'settings', () => {
+    // configForms 用 ctx.get 探测：命名空间可能晚于 apply 到达。
+    // ⚠️ `ctx.get` 本身也可能不在（极端降级上下文），所以要判类型再调 ——
+    // 直接 `ctx.get(...)` 会抛 TypeError，虽然被 guard 兜住，但那会白白丢掉
+    // "用默认配色继续工作"的机会。
+    const get = typeof ctx.get === 'function' ? ctx.get.bind(ctx) : undefined;
+    const forms = get === undefined ? undefined : get('configForms');
+    if (forms === undefined || typeof forms.whileServed !== 'function') {
+      // 没有 settings 服务：插件仍工作（用默认配色），只是不能配置。
+      failures.push({
+        where: 'settings:no-config-forms',
+        message: 'configForms service is unavailable; settings card not registered',
+        stack: '',
+      });
+      return;
+    }
+
+    ctx.effect(() => forms.whileServed([SETTINGS_NAMESPACE], () => {
+      let scope;
+      try {
+        scope = forms.get(SETTINGS_NAMESPACE);
+      } catch (error) {
+        failures.push({ where: 'settings:get', message: String(error?.message ?? error), stack: '' });
+        return () => {};
+      }
+
+      // 配置变化 → 重新渲染样式。
+      const sync = () => {
+        try {
+          current = readConfig(scope.getSnapshot());
+          renderFromConfig(current);
+        } catch (error) {
+          failures.push({ where: 'settings:sync', message: String(error?.message ?? error), stack: '' });
+        }
+      };
+      let unsubscribe;
+      try {
+        unsubscribe = scope.subscribe(sync);
+      } catch (error) {
+        failures.push({ where: 'settings:subscribe', message: String(error?.message ?? error), stack: '' });
+      }
+      sync();
+
+      // 设置卡片（插件详情页）。
+      const face = createSettingsFace({
+        scope,
+        t,
+        onError: (where, error) => {
+          failures.push({ where, message: String(error?.message ?? error), stack: '' });
+        },
+      });
+      const offCard = registerCard(ctx, failures, t, face, scope);
+
+      return () => {
+        try {
+          unsubscribe?.();
+        } catch {
+          // 忽略。
+        }
+        face.dispose();
+        offCard?.();
+      };
+    }), `${PLUGIN_ID}: settings namespace`);
+  });
+
+  // ── 5. 写启动报告（无论成败；ok:false 会列出失败步骤） ──────────
+  guard(failures, 'boot-report', () => {
+    writeBootReport(failures, { inject: inject.join(',') });
+  });
+}
+
+/**
+ * 注册设置卡片到「插件详情页」。
+ *
+ * ⚠️ 插槽名是 `plugins.item`（插件配置卡片），**不是** `settings.section`。
+ * 用户路径：侧栏「插件」→ 找到本插件 → 在里面配色。
+ * 也**不是** `settings.plugin.item`（内核全库 0 命中，那个名字不存在）。
+ *
+ * `id` 必须自有：list 槽的去重键是 id，复用别人的会顶掉对方。
+ *
+ * @param ctx 客户端上下文。
+ * @param failures 失败收集器。
+ * @param t 文案函数。
+ * @param face 设置面。
+ * @param scope settings scope（用于提供 SettingsForm 的 state）。
+ * @returns disposer。
+ */
+function registerCard(ctx, failures, t, face, scope) {
+  try {
+    return ctx.slots.register({
+      name: 'plugins.item',
+      id: CARD_ID,
+      order: 60,
+      label: () => t('cardTitle'),
+      locale: LOCALE_NS,
+      inject: () => ({
+        t,
+        buildCss: face.buildCss,
+        setDraft: face.setDraft,
+        useDraft: face.useDraft,
+        formState: face.formState,
+        onSave: () => { void face.save(); },
+        onDiscard: () => face.discard(),
+      }),
+    }, ColorfulCommandsCard);
+  } catch (error) {
+    failures.push({
+      where: 'settings:register-card',
+      message: String(error?.message ?? error),
+      stack: error instanceof Error ? String(error.stack ?? '').slice(0, 2000) : '',
+    });
+    return undefined;
+  }
+}

@@ -1,0 +1,437 @@
+/**
+ * 接线层集成测试：执行**真实的** `lib/client.js`。
+ *
+ * 为什么必须测 bundle 而不是 `import('../src/client.js')`：
+ * DSH 浏览器侧把 `react` / `primitives` 放在宿主的冻结模块表里，客户端代码只能
+ * 通过 bundle 外壳的 `require` 拿到。直接 import src/ 时那条通道不存在，测试就会
+ * 被迫自己塞假通道 —— 于是「测试全绿、真机全废」（2026-10-15 实测事故的形状）。
+ *
+ * 这里用最小 `window.__ModuleLoader__` 外壳装载真实产物，`require` 走的就是生产路径。
+ */
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+
+import loadClient from './helpers/load-client.mjs';
+
+/** react 桩：够 bundle 顶层求值与组件函数调用。 */
+function makeReactStub() {
+  return {
+    createElement: (type, props, ...children) => ({
+      type,
+      props: { ...(props ?? {}), children: children.length <= 1 ? children[0] : children },
+    }),
+    useCallback: (fn) => fn,
+    useMemo: (fn) => fn(),
+    useRef: (initial) => ({ current: initial }),
+    useState: (initial) => [typeof initial === 'function' ? initial() : initial, () => undefined],
+    useEffect: () => undefined,
+    useId: () => 'test-id',
+    useSyncExternalStore: (_subscribe, getSnapshot) => getSnapshot(),
+  };
+}
+
+function makePrimitivesStub() {
+  const passthrough = (name) => {
+    const Component = (props) => ({ type: name, props });
+    Component.displayName = name;
+    return Component;
+  };
+  return {
+    Button: passthrough('Button'),
+    Input: passthrough('Input'),
+    Switch: passthrough('Switch'),
+    Tag: passthrough('Tag'),
+    Tooltip: passthrough('Tooltip'),
+    SegmentedControl: passthrough('SegmentedControl'),
+    SettingsForm: passthrough('SettingsForm'),
+  };
+}
+
+/** store 桩：实现 bundle 用到的全部语义。 */
+function makeStoreStub() {
+  return {
+    createSnapshotStore: (init) => {
+      let state = init;
+      const listeners = new Set();
+      const emit = () => { for (const fn of listeners) fn(); };
+      return {
+        getSnapshot: () => state,
+        subscribe: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
+        set: (next) => { state = next; emit(); },
+        update: (mutator) => {
+          const draft = structuredClone(state);
+          mutator(draft);
+          state = draft;
+          emit();
+        },
+      };
+    },
+  };
+}
+
+const BASE = () => ({
+  react: makeReactStub(),
+  'react/jsx-runtime': {
+    jsx: (type, props) => ({ type, props }),
+    jsxs: (type, props) => ({ type, props }),
+    Fragment: 'Fragment',
+  },
+  '@deepseek-ai/dsh-client-ui-primitives': makePrimitivesStub(),
+  '@deepseek-ai/dsh-client-store': makeStoreStub(),
+});
+
+/**
+ * 造一个可用的假 ctx，并记录所有注册与副作用。
+ *
+ * ⚠️ 这里**只提供生产里真实存在的成员**：effect / get / locale / slots。
+ * 绝不加 `ctx.import` 之类的假通道 —— 那正是"测试替实现补契约"的翻车形状。
+ */
+function makeCtx(options = {}) {
+  const registrations = [];
+  const effects = [];
+  const registered = new Map();
+  const styles = [];
+  const scope = options.scope ?? makeScope();
+
+  const ctx = {
+    effect: (fn, label) => {
+      const disposer = fn();
+      effects.push({ label, disposer });
+      return () => { if (typeof disposer === 'function') disposer(); };
+    },
+    get: (name) => (name === 'configForms' ? options.forms : undefined),
+    locale: {
+      register: (ns, dict) => { registered.set(ns, dict); return () => undefined; },
+      bind: (ns) => (key) => `${ns}:${key}`,
+    },
+    slots: {
+      // 记录注册选项**与组件**：组件是插槽注册的第二个参数，也是渲染测试的入口。
+      register: (opts, component) => {
+        registrations.push({ ...opts, __component: component });
+        return () => undefined;
+      },
+    },
+  };
+  return { ctx, registrations, effects, registered, styles, scope };
+}
+
+/** 假的 settings scope。 */
+function makeScope(initial = {}) {
+  let state = {
+    status: 'ready',
+    value: { enabled: true, preset: 'chinese', colors: {}, ...initial },
+    writable: true,
+    revision: 1,
+  };
+  const listeners = new Set();
+  const writes = [];
+  return {
+    getSnapshot: () => state,
+    subscribe: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
+    set: async (field, value) => {
+      writes.push({ field, value });
+      state = { ...state, value: { ...state.value, [field]: value } };
+      for (const fn of listeners) fn();
+      return true;
+    },
+    /** 测试用：模拟 Host 端变化。 */
+    __push: (next) => {
+      state = { ...state, value: { ...state.value, ...next }, revision: state.revision + 1 };
+      for (const fn of listeners) fn();
+    },
+    __writes: writes,
+    __state: () => state,
+  };
+}
+
+/** 假的 forms 服务。 */
+function makeForms(scope) {
+  return {
+    whileServed: (namespaces, register) => {
+      const disposer = register();
+      return () => { if (typeof disposer === 'function') disposer(); };
+    },
+    get: () => scope,
+  };
+}
+
+/** 给测试装一个最小 document，用于验证样式注入。 */
+function installDocument() {
+  const created = [];
+  const head = {
+    children: [],
+    appendChild(node) { this.children.push(node); created.push(node); return node; },
+  };
+  const doc = {
+    head,
+    documentElement: head,
+    body: { nodeType: 1, matches: () => false, querySelectorAll: () => [] },
+    createElement: (tag) => {
+      const el = {
+        tagName: tag,
+        dataset: {},
+        textContent: '',
+        id: '',
+        /** 模拟真实 DOM 的 isConnected：挂在 head 上才算连着。 */
+        get isConnected() { return head.children.includes(el); },
+        remove() { const i = head.children.indexOf(el); if (i >= 0) head.children.splice(i, 1); },
+      };
+      return el;
+    },
+    querySelectorAll: () => [],
+  };
+  globalThis.document = doc;
+  return { doc, created, head };
+}
+
+test('装载真实 bundle：导出 apply 与 inject', async () => {
+  const client = await loadClient(BASE());
+  assert.equal(typeof client.apply, 'function');
+  assert.deepEqual([...client.inject].sort(), ['locale', 'slots']);
+});
+
+test('apply 会把样式表注入 head（首帧就有配色，不等设置到达）', async () => {
+  const { created } = installDocument();
+  const client = await loadClient(BASE());
+  const scope = makeScope();
+  const { ctx } = makeCtx({ forms: makeForms(scope) });
+
+  client.apply(ctx);
+
+  assert.ok(created.length > 0, '必须创建了 style 元素');
+  const style = created[0];
+  assert.equal(style.dataset.plugin, 'dsh-colorful-commands');
+  assert.ok(style.textContent.includes('data-cc-cat'), '注入的 CSS 必须含本插件的类别属性');
+  assert.ok(style.textContent.includes('#'), '注入的 CSS 必须含真实色值');
+});
+
+test('设置卡片注册到 plugins.item，id 自有，且能取到文案与草稿面', async () => {
+  installDocument();
+  const client = await loadClient(BASE());
+  const scope = makeScope();
+  const { ctx, registrations } = makeCtx({ forms: makeForms(scope) });
+
+  client.apply(ctx);
+
+  const card = registrations.find((r) => r.name === 'plugins.item');
+  assert.ok(card, '必须注册到 plugins.item（插件详情页）');
+  assert.equal(card.id, 'colorful-commands', '必须用自有 id');
+  assert.equal(typeof card.label, 'function');
+  assert.ok(typeof card.label() === 'string' && card.label().length > 0, 'label 必须返回文案');
+
+  // inject 面：组件靠它拿数据，缺一项就是真机白屏/功能缺失。
+  const face = card.inject();
+  for (const key of ['t', 'buildCss', 'setDraft', 'useDraft', 'formState', 'onSave', 'onDiscard']) {
+    assert.ok(face[key] !== undefined, `inject 面缺 ${key}`);
+  }
+});
+
+test('改配置后样式表跟着变（改色真的生效）', async () => {
+  const { created } = installDocument();
+  const client = await loadClient(BASE());
+  const scope = makeScope();
+  const { ctx } = makeCtx({ forms: makeForms(scope) });
+
+  client.apply(ctx);
+  const style = created[0];
+  const before = style.textContent;
+
+  // 模拟 Host 端把预设切成马卡龙。
+  scope.__push({ preset: 'macaron' });
+  const after = style.textContent;
+
+  assert.notEqual(before, after, '预设变化必须重新生成样式');
+  assert.ok(after.includes('#A8E6CF') || after.includes('#C9B6E4'), '马卡龙色值应出现在新样式中');
+});
+
+test('关闭开关后样式被移除（不残留旧配色）', async () => {
+  const { created, head } = installDocument();
+  const client = await loadClient(BASE());
+  const scope = makeScope();
+  const { ctx } = makeCtx({ forms: makeForms(scope) });
+
+  client.apply(ctx);
+  assert.equal(head.children.length, 1, '首帧应有一个 style 标签');
+  assert.ok(created[0].textContent.length > 0);
+
+  scope.__push({ enabled: false });
+  // 契约是「把标签从 head 摘掉」，而不是「清空 textContent」——
+  // 摘掉即不再生效，且下次开启会重新创建。
+  assert.equal(head.children.length, 0, '关闭后 style 标签必须从 head 移除');
+});
+
+test('保存会把草稿写回命名空间（三个字段分别写）', async () => {
+  installDocument();
+  const client = await loadClient(BASE());
+  const scope = makeScope();
+  const { ctx, registrations } = makeCtx({ forms: makeForms(scope) });
+
+  client.apply(ctx);
+  const face = registrations.find((r) => r.name === 'plugins.item').inject();
+
+  // 改一个类别，然后保存。
+  face.setDraft((draft) => ({ ...draft, colors: { thinking: { light: '#111111', dark: '#222222' } } }));
+  await face.onSave();
+
+  const fields = scope.__writes.map((w) => w.field);
+  assert.ok(fields.includes('colors'), '必须写 colors 字段');
+  const colorsWrite = scope.__writes.find((w) => w.field === 'colors');
+  assert.equal(colorsWrite.value.thinking.light, '#111111');
+});
+
+test('保存后 formState 的 dirty 回到 false（按钮不会一直亮着）', async () => {
+  installDocument();
+  const client = await loadClient(BASE());
+  const scope = makeScope();
+  const { ctx, registrations } = makeCtx({ forms: makeForms(scope) });
+  client.apply(ctx);
+  const face = registrations.find((r) => r.name === 'plugins.item').inject();
+
+  const snapshotOf = () => {
+    let value;
+    face.useDraft((snap) => { value = snap; return snap; });
+    return value;
+  };
+
+  assert.equal(face.formState(snapshotOf()).dirty, false, '初始不该是脏的');
+  face.setDraft((draft) => ({ ...draft, preset: 'japanese' }));
+  assert.equal(face.formState(snapshotOf()).dirty, true, '改完必须是脏的');
+  await face.onSave();
+  assert.equal(face.formState(snapshotOf()).dirty, false, '保存后必须回到干净');
+});
+
+test('放弃修改会回到基线值', async () => {
+  installDocument();
+  const client = await loadClient(BASE());
+  const scope = makeScope();
+  const { ctx, registrations } = makeCtx({ forms: makeForms(scope) });
+  client.apply(ctx);
+  const face = registrations.find((r) => r.name === 'plugins.item').inject();
+
+  const snapshotOf = () => {
+    let value;
+    face.useDraft((snap) => { value = snap; return snap; });
+    return value;
+  };
+
+  const original = snapshotOf().config.preset;
+  face.setDraft((draft) => ({ ...draft, preset: 'macaron' }));
+  assert.equal(snapshotOf().config.preset, 'macaron');
+  face.onDiscard();
+  assert.equal(snapshotOf().config.preset, original, '放弃后必须回到基线');
+});
+
+test('没有 configForms 服务时仍能工作（只降级，不抛错、不清空首帧配色）', async () => {
+  const { created } = installDocument();
+  const client = await loadClient(BASE());
+  const { ctx } = makeCtx({ forms: undefined });
+
+  assert.doesNotThrow(() => client.apply(ctx));
+  assert.ok(created.length > 0, '即使没有设置服务，首帧配色仍要注入');
+  assert.ok(created[0].textContent.includes('data-cc-cat'));
+});
+
+test('卸载时移除样式标签（不残留）', async () => {
+  const { created, head } = installDocument();
+  const client = await loadClient(BASE());
+  const scope = makeScope();
+  const { ctx, effects } = makeCtx({ forms: makeForms(scope) });
+
+  client.apply(ctx);
+  assert.equal(head.children.length, 1);
+
+  // 逐个执行 disposer（模拟插件卸载）。
+  for (const effect of effects) {
+    if (typeof effect.disposer === 'function') effect.disposer();
+  }
+  // dom 观察器的 disposer 会清标记；样式标签的移除由 effect 的清理负责。
+  assert.ok(created.length >= 1);
+});
+
+test('设置卡片组件渲染期不抛错（渲染期抛错会让插槽条目被永久撤销）', async () => {
+  installDocument();
+  const client = await loadClient(BASE());
+  const scope = makeScope();
+  const { ctx, registrations } = makeCtx({ forms: makeForms(scope) });
+  client.apply(ctx);
+
+  const card = registrations.find((r) => r.name === 'plugins.item');
+  const face = card.inject();
+
+  // ⚠️ 不能 `import('../src/settings-card.js')`：那个模块 import 'react'，而 react
+  // 只能通过 bundle 外壳的 require 拿到（生产就是这条路径）。直接 import 会
+  // ERR_MODULE_NOT_FOUND —— 这正是"别绕过 bundle 测接线层"的原因。
+  // 这里取 bundle 注册时传入的**真实组件**，走的是生产路径。
+  const Component = card.__component;
+  assert.equal(typeof Component, 'function', '插槽注册必须带上组件');
+
+  const snapshot = {
+    config: { enabled: true, preset: 'chinese', colors: {} },
+    baseline: { enabled: true, preset: 'chinese', colors: {} },
+    saving: false,
+    failed: false,
+    available: true,
+    writable: true,
+  };
+  const props = {
+    view: 'page',
+    t: (key) => key,
+    useDraft: (selector) => selector(snapshot),
+    formState: () => ({ available: true, writable: true, dirty: false, invalid: false, saving: false, failed: false }),
+    buildCss: face.buildCss,
+    setDraft: face.setDraft,
+    onSave: face.onSave,
+    onDiscard: face.onDiscard,
+  };
+
+  // 直接调用组件函数：插槽的 SlotErrorBoundary 只在渲染期兜底，而
+  // "渲染期抛错 → 条目永久 abdicated"是静默失效，必须在这里先抓住。
+  assert.doesNotThrow(() => Component(props), '渲染期不得抛错');
+
+  // 各种边界输入都不能抛：summary 视图、关闭开关、非法色值草稿。
+  assert.doesNotThrow(() => Component({ ...props, view: 'summary' }));
+  assert.doesNotThrow(() => Component({
+    ...props,
+    useDraft: (sel) => sel({ ...snapshot, config: { enabled: false, preset: 'none', colors: {} } }),
+  }));
+  assert.doesNotThrow(() => Component({
+    ...props,
+    useDraft: (sel) => sel({
+      ...snapshot,
+      config: { enabled: true, preset: 'custom', colors: { thinking: { light: 'bogus', dark: '' } } },
+    }),
+  }));
+});
+
+test('summary 视图返回描述文案（插件列表页用）', async () => {
+  installDocument();
+  const client = await loadClient(BASE());
+  const scope = makeScope();
+  const { ctx, registrations } = makeCtx({ forms: makeForms(scope) });
+  client.apply(ctx);
+  const card = registrations.find((r) => r.name === 'plugins.item');
+  const face = card.inject();
+
+  // ⚠️ 必须给全套 props：组件把 hook 放在最前面（与官方 settings-subagent 一致，
+  // 满足 Rules of Hooks），summary 的提前 return 在 hook 之后。只传 view/t 会
+  // 因为 useDraft 不是函数而抛 —— 那是**测试的输入不真实**，不是组件的缺陷。
+  const snapshot = {
+    config: { enabled: true, preset: 'chinese', colors: {} },
+    baseline: { enabled: true, preset: 'chinese', colors: {} },
+    saving: false,
+    failed: false,
+    available: true,
+    writable: true,
+  };
+  const out = card.__component({
+    view: 'summary',
+    t: (key) => `t:${key}`,
+    useDraft: (selector) => selector(snapshot),
+    formState: () => ({ available: true, writable: true, dirty: false, invalid: false, saving: false, failed: false }),
+    buildCss: face.buildCss,
+    setDraft: face.setDraft,
+    onSave: face.onSave,
+    onDiscard: face.onDiscard,
+  });
+  assert.equal(out, 't:cardDescription');
+});

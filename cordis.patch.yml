@@ -1,0 +1,17 @@
+# dsh-colorful-commands —— 按类别给 DSH 界面着色。
+#
+# 这一行只把插件挂进 profile。**所有可调项都在「插件」页里本插件的卡片上**
+# （侧栏「插件」→ 多彩命令），不需要改这里。
+#
+# ⚠️ 这条 insert 的 `id` 同时是 settings 命名空间（内核契约：命名空间取自
+# loader entry id）。改它就必须同步改 src/constants.js 的 SETTINGS_NAMESPACE，
+# 否则设置卡片会永远读到默认值。
+- insert:
+    - id: dsh-colorful-commands
+      name: dsh-colorful-commands
+      config:
+        # 默认值：启用，用中国传统色预设。
+        enabled: true
+        preset: chinese
+        # 逐类别的自定义覆盖，留空表示完全用预设。
+        colors: {}
