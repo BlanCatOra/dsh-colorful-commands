@@ -110,6 +110,9 @@ function makeCtx(options = {}) {
         registrations.push({ ...opts, __component: component });
         return () => undefined;
       },
+      // 生产里官方插件走 `slots.inject(槽名, cb)` 等插槽声明；这里如实提供，
+      // 让测试覆盖那条真实路径（少了它就会只测到 fallback 分支）。
+      inject: (slotName, callback) => callback(),
     },
   };
   return { ctx, registrations, effects, registered, styles, scope };
@@ -434,4 +437,25 @@ test('summary 视图返回描述文案（插件列表页用）', async () => {
     onDiscard: face.onDiscard,
   });
   assert.equal(out, 't:cardDescription');
+});
+
+test('renderer 没有 slots.inject 时回退到直接 register（旧版兼容）', async () => {
+  installDocument();
+  const client = await loadClient(BASE());
+  const scope = makeScope();
+  const registrations = [];
+  const ctx = {
+    effect: (fn) => { const d = fn(); return () => { if (typeof d === 'function') d(); }; },
+    get: (name) => (name === 'configForms' ? makeForms(scope) : undefined),
+    locale: { register: () => () => undefined, bind: (ns) => (key) => `${ns}:${key}` },
+    // 刻意不提供 inject：模拟旧版 renderer。
+    slots: {
+      register: (opts, component) => { registrations.push({ ...opts, __component: component }); return () => undefined; },
+    },
+  };
+
+  assert.doesNotThrow(() => client.apply(ctx));
+  const card = registrations.find((r) => r.name === 'plugins.item');
+  assert.ok(card, '没有 slots.inject 时也必须回退注册成功');
+  assert.equal(typeof card.__component, 'function');
 });
