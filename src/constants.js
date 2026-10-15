@@ -40,10 +40,14 @@ export const PRESET_CUSTOM = 'custom';
 export const PRESETS = [PRESET_NONE, PRESET_CHINESE, PRESET_JAPANESE, PRESET_MACARON, PRESET_CUSTOM];
 
 /**
- * 着色类别。
+ * 着色类别（内容行）。
  *
- * 每个类别对应一组稳定的 DOM 选择器（见 targets.js），互不重叠，
- * 因此用户给"思考"和"执行命令"选不同颜色时不会互相覆盖。
+ * 每个类别对应一组稳定的 DOM 钩子（见 `classify.js`），互不重叠。
+ *
+ * ⚠️ **曾经有 `user` / `assistant` 两类，已删除。** 原因（实测）：
+ * `data-chat-flow-kind="user"` 挂在**整列宽**的 flowItem 包裹层上，而气泡本体
+ * 在内部靠右 —— 给它加左侧竖条会被画到窗口最左缘，与内容完全脱节，非常难看。
+ * 而且这两类也不在需求里（要的是思考/命令/文件这类**过程行**）。
  */
 export const CATEGORIES = [
   'thinking',
@@ -54,29 +58,29 @@ export const CATEGORIES = [
   'search',
   'web',
   'other',
-  'user',
-  'assistant',
 ];
 
 /**
  * UI 控件类别。
  *
- * 与消息类别分开列，是因为两者的选择器机制不同：
- * - 消息类别靠 `[data-tool]` / `[data-variant]` / `[data-kind]` 命中**内容行**；
- * - 控件类别靠 `[data-slot="<槽名>"]` 命中**插槽锚点**（`ui-renderer` 的
- *   `renderSlot` 稳定契约），因此"权限选择、模型选择"这类控件也能各自上色。
+ * 与内容行分开列，是因为两者的选择器机制不同：
+ * - 内容行靠 `[data-tool]` / `[data-variant]` / `[data-kind]` 命中；
+ * - 控件靠 `[data-slot="<槽名>"]` 命中**插槽锚点**（`ui-renderer` 的
+ *   `renderSlot` 稳定契约）。
  *
- * 用户在同一张设置卡片里配置这两组，只是分组展示。
+ * ⚠️ **`ctl-toolbar` 已删除**：它命中 `conversation.input.left/right/dock/overlay`，
+ * 而这些槽里装的是**加号按钮、斜杠命令触发器等原生控件**。给它们上色会波及
+ * 弹出的斜杠命令菜单（实测截图里菜单项被涂成灰色，非常难看），且这些按钮本来
+ * 就有清晰的语义配色，不需要我们插手。控件类只保留**有明确语义**的那几个。
  */
 export const CONTROL_CATEGORIES = [
   'ctl-permission',
   'ctl-model',
   'ctl-plan',
   'ctl-activity',
-  'ctl-toolbar',
 ];
 
-/** 全部可配置类别（消息 + 控件）。设置卡片按这个顺序渲染。 */
+/** 全部可配置类别（内容 + 控件）。设置卡片按这个顺序渲染。 */
 export const ALL_CATEGORIES = [...CATEGORIES, ...CONTROL_CATEGORIES];
 
 /** 类别的中文名（内置兜底；界面文案走 locale 字典）。 */
@@ -89,13 +93,10 @@ export const CATEGORY_LABELS = {
   search: '搜索',
   web: '网络请求',
   other: '其他工具',
-  user: '用户消息',
-  assistant: '助手回复',
   'ctl-permission': '权限选择',
   'ctl-model': '模型选择',
   'ctl-plan': '计划模式',
   'ctl-activity': '活动栏',
-  'ctl-toolbar': '工具行控件',
 };
 
 /**
@@ -130,9 +131,6 @@ export const DANGER_PATTERNS = [
   'DROP DATABASE',
   'TRUNCATE TABLE',
 ];
-
-/** 默认不透明度：只给左边框与文字着色，保持背景可读。 */
-export const DEFAULT_OPACITY = 100;
 
 /** 合法十六进制颜色（#RGB / #RRGGBB）。 */
 export const HEX_RE = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;

@@ -68,37 +68,31 @@ const VARIANT_CATEGORY = {
  * DSH `data-kind`（轨迹行）→ 类别。
  *
  * 轨迹视图（trajectory）与消息流（chat）用不同的钩子，所以两套都要覆盖。
+ *
+ * ⚠️ `user` / `message` 不再映射 —— 它们是**消息本体**，不是过程行；给消息
+ * 本体上色没有意义（而且消息行的 DOM 层级与过程行不同，见 constants.js 的说明）。
+ * 未映射的 kind 会落到 `null`（不着色），这是刻意的。
  */
 const KIND_CATEGORY = {
-  user: 'user',
-  message: 'assistant',
   tool: 'command',
   subtool: 'other',
-};
-
-/**
- * DSH `data-chat-flow-kind`（消息流顶层项）→ 类别。
- */
-const FLOW_CATEGORY = {
-  user: 'user',
-  steering: 'user',
 };
 
 /**
  * DSH 插槽名 → 控件类别。`ui-renderer` 的 `renderSlot` 会给每个插槽条目
  * 套一层 `[data-slot="<槽名>"]`，这是**官方稳定契约**（不是内部实现细节），
  * 所以"其他控件也一样可染色"就靠它。
+ *
+ * ⚠️ **只列有明确语义的控件槽。** `left` / `right` / `dock` / `overlay` /
+ * `attachments` 装的是加号按钮、斜杠命令触发器等**原生控件**：给它们上色会
+ * 波及弹出的菜单（实测斜杠命令菜单项被涂灰，非常难看），而且这些按钮本来
+ * 就有清晰的语义配色。刻意不碰。
  */
 const SLOT_CATEGORY = {
   'conversation.input.permission': 'ctl-permission',
   'conversation.input.model': 'ctl-model',
   'conversation.input.plan': 'ctl-plan',
   'conversation.input.activity': 'ctl-activity',
-  'conversation.input.left': 'ctl-toolbar',
-  'conversation.input.right': 'ctl-toolbar',
-  'conversation.input.dock': 'ctl-toolbar',
-  'conversation.input.overlay': 'ctl-toolbar',
-  'conversation.input.attachments': 'ctl-toolbar',
 };
 
 /**
@@ -163,9 +157,9 @@ export function classifyAttrs(attrs, options = {}) {
   const kind = a['data-kind'];
   if (typeof kind === 'string' && Object.hasOwn(KIND_CATEGORY, kind)) return KIND_CATEGORY[kind];
 
-  // 5. 消息流顶层。
-  const flow = a['data-chat-flow-kind'];
-  if (typeof flow === 'string' && Object.hasOwn(FLOW_CATEGORY, flow)) return FLOW_CATEGORY[flow];
+  // ⚠️ 刻意不处理 `data-chat-flow-kind`：它是**整列宽**的 flowItem 包裹层，
+  // 而消息气泡在内部靠右 —— 给它上色会把竖条画到窗口最左缘，与内容脱节
+  // （实测截图里那条红竖线就是这个）。见 constants.js 的说明。
 
   return null;
 }
@@ -185,7 +179,6 @@ export function readAttrs(element) {
     'data-tool',
     'data-variant',
     'data-kind',
-    'data-chat-flow-kind',
   ];
   const attrs = {};
   for (const name of names) {
@@ -196,4 +189,4 @@ export function readAttrs(element) {
 }
 
 /** 导出内部表，供测试断言覆盖完整性。 */
-export const _tables = { TOOL_CATEGORY, VARIANT_CATEGORY, KIND_CATEGORY, FLOW_CATEGORY, SLOT_CATEGORY };
+export const _tables = { TOOL_CATEGORY, VARIANT_CATEGORY, KIND_CATEGORY, SLOT_CATEGORY };

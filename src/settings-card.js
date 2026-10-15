@@ -404,6 +404,26 @@ export function ColorfulCommandsCard(props) {
           ],
         }),
 
+        // ── 染色范围 ──────────────────────────────────────────────
+        // 默认「只染图标与短标签」：第一版把整段摘要一起染了，满屏饱和色、
+        // 层级全丢（实测被用户判为"丑死了"）。想要更花的人可以在这里开。
+        jsxs('div', {
+          style: { display: 'flex', alignItems: 'center', gap: '10px' },
+          children: [
+            jsx(Switch, {
+              checked: draft.colorText === true,
+              label: t('colorTextLabel'),
+              onChange: (checked) => setDraft((current) => ({ ...current, colorText: checked })),
+            }),
+            jsxs('div', {
+              children: [
+                jsx('div', { style: { fontSize: '13px', color: 'var(--dsw-alias-label-primary)' }, children: t('colorTextLabel') }),
+                jsx('div', { style: { fontSize: '12px', color: 'var(--dsw-alias-label-tertiary)' }, children: t('colorTextHint') }),
+              ],
+            }),
+          ],
+        }),
+
         // ── 预设 ──────────────────────────────────────────────────
         jsxs('div', {
           style: { display: 'flex', flexDirection: 'column', gap: '6px' },

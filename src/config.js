@@ -57,6 +57,7 @@ const presetSchema = z.union([
 export const Config = z.object({
   enabled: z.boolean().default(true).description('是否启用着色'),
   preset: presetSchema.default('chinese'),
+  colorText: z.boolean().default(false).description('是否连正文/摘要一起染色（默认只染图标与短标签）'),
   colors: colorsSchema.default({}),
 });
 

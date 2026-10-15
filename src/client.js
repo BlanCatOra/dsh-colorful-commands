@@ -103,7 +103,7 @@ export function applyStylesheet(cssText) {
  */
 export function renderFromConfig(config) {
   const { colors, enabled } = resolveColors(config, { presetColors: presetColors(config?.preset) });
-  const css = buildStylesheet(colors, { enabled });
+  const css = buildStylesheet(colors, { enabled, colorText: config?.colorText === true });
   applyStylesheet(css);
   return css;
 }

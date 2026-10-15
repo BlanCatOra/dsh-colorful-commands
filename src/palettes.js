@@ -54,15 +54,12 @@ const CHINESE = {
   // 墨 #50616D
   other: { light: '#50616D', dark: '#A3B1BC' },
   // 海棠红 #DB5A6B
-  user: { light: '#B23A48', dark: '#DB5A6B' },
   // 石青 #7BCFA6 / 群青 #4C8DAE
-  assistant: { light: '#4C8DAE', dark: '#7BCFA6' },
   // 控件类沿用同一套语义
   'ctl-permission': { light: '#B23A48', dark: '#DB5A6B' },
   'ctl-model': { light: '#4C8DAE', dark: '#7BCFA6' },
   'ctl-plan': { light: '#8C4356', dark: '#CCA4E3' },
   'ctl-activity': { light: '#50616D', dark: '#A3B1BC' },
-  'ctl-toolbar': { light: '#177CB0', dark: '#5BC0EB' },
 };
 
 /** 日本传统色预设。色名与读音见文件头出处。 */
@@ -84,14 +81,11 @@ const JAPANESE = {
   // 利休茶 #8F8667 / 銀鼠 #AFAFB0
   other: { light: '#8F8667', dark: '#AFAFB0' },
   // 紅 #CB1B45
-  user: { light: '#CB1B45', dark: '#E87A9B' },
   // 紫 #884898 / 藤色 #B28FCE
-  assistant: { light: '#884898', dark: '#B28FCE' },
   'ctl-permission': { light: '#B7282E', dark: '#E94709' },
   'ctl-model': { light: '#884898', dark: '#B28FCE' },
   'ctl-plan': { light: '#7058A3', dark: '#B28FCE' },
   'ctl-activity': { light: '#8F8667', dark: '#AFAFB0' },
-  'ctl-toolbar': { light: '#006284', dark: '#00A3AF' },
 };
 
 /**
@@ -108,14 +102,11 @@ const MACARON = {
   write: { light: '#3FA372', dark: '#A8E6CF' }, // 薄荷绿
   search: { light: '#2FA8A0', dark: '#9FE2DE' }, // 湖水绿
   web: { light: '#5C6BC0', dark: '#B4C0F0' }, // 蓝紫
-  other: { light: '#8A8F98', dark: '#D8DEE9' }, // 中性灰
-  user: { light: '#D96C8A', dark: '#FFB3C6' }, // 樱花粉
-  assistant: { light: '#5B8DEF', dark: '#BBD4FF' }, // 天空蓝
+  other: { light: '#8A8F98', dark: '#D8DEE9' }, // 中性灰 // 樱花粉 // 天空蓝
   'ctl-permission': { light: '#D9534F', dark: '#FF8B94' },
   'ctl-model': { light: '#5B8DEF', dark: '#BBD4FF' },
   'ctl-plan': { light: '#8E7CC3', dark: '#C9B6E4' },
   'ctl-activity': { light: '#8A8F98', dark: '#D8DEE9' },
-  'ctl-toolbar': { light: '#4A90D9', dark: '#A8D8EA' },
 };
 
 /**

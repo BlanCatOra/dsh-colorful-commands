@@ -57,20 +57,27 @@ test('isDangerousCommand 对空值与非字符串安全', () => {
   assert.equal(isDangerousCommand('drop table users'), true);
 });
 
-test('轨迹行与消息流顶层分类', () => {
-  assert.equal(classifyAttrs({ 'data-kind': 'user' }), 'user');
-  assert.equal(classifyAttrs({ 'data-kind': 'message' }), 'assistant');
+test('轨迹行的工具类着色，消息本体不着色', () => {
   assert.equal(classifyAttrs({ 'data-kind': 'tool' }), 'command');
-  assert.equal(classifyAttrs({ 'data-chat-flow-kind': 'user' }), 'user');
-  assert.equal(classifyAttrs({ 'data-chat-flow-kind': 'steering' }), 'user');
-  // turn-process 不是可着色类别。
+  assert.equal(classifyAttrs({ 'data-kind': 'subtool' }), 'other');
+  // 消息本体（用户/助手）刻意不着色：它们不是过程行，而且 flowItem 是整列宽，
+  // 给它加竖条会跑到窗口最左缘、与靠右的气泡脱节（实测）。
+  assert.equal(classifyAttrs({ 'data-kind': 'user' }), null);
+  assert.equal(classifyAttrs({ 'data-kind': 'message' }), null);
+  assert.equal(classifyAttrs({ 'data-chat-flow-kind': 'user' }), null);
+  assert.equal(classifyAttrs({ 'data-chat-flow-kind': 'steering' }), null);
   assert.equal(classifyAttrs({ 'data-chat-flow-kind': 'turn-process' }), null);
 });
 
 test('插槽锚点分类（界面控件）', () => {
   assert.equal(classifyAttrs({ 'data-slot': 'conversation.input.permission' }), 'ctl-permission');
   assert.equal(classifyAttrs({ 'data-slot': 'conversation.input.model' }), 'ctl-model');
-  assert.equal(classifyAttrs({ 'data-slot': 'conversation.input.left' }), 'ctl-toolbar');
+  assert.equal(classifyAttrs({ 'data-slot': 'conversation.input.plan' }), 'ctl-plan');
+  // 工具行槽（left/right/dock/overlay）刻意不着色：里面是加号按钮、斜杠命令
+  // 触发器等原生控件，染色会波及弹出的菜单（实测菜单项被涂灰）。
+  assert.equal(classifyAttrs({ 'data-slot': 'conversation.input.left' }), null);
+  assert.equal(classifyAttrs({ 'data-slot': 'conversation.input.overlay' }), null);
+  assert.equal(classifyAttrs({ 'data-slot': 'conversation.input.right' }), null);
   // 未知插槽不猜。
   assert.equal(classifyAttrs({ 'data-slot': 'some.other.slot' }), null);
 });
@@ -106,7 +113,6 @@ test('分类表覆盖全部可配置类别（防止加了类别却忘了映射�
     ...Object.values(_tables.TOOL_CATEGORY),
     ...Object.values(_tables.VARIANT_CATEGORY),
     ...Object.values(_tables.KIND_CATEGORY),
-    ...Object.values(_tables.FLOW_CATEGORY),
     ...Object.values(_tables.SLOT_CATEGORY),
     // `danger` 不来自任何表：它是 command 类在命中危险词表时的**细化**，
     // 因此用一条真实输入来证明它可达（而不是把它塞进表里假装覆盖）。
@@ -264,4 +270,51 @@ test('预览作用域对空输入与注释行安全', () => {
   assert.equal(scopedPreviewCss(''), '');
   assert.equal(scopedPreviewCss('/* only a comment */'), '');
   assert.equal(scopedPreviewCss(undefined), '');
+});
+
+// ── 回归护栏：三条"丑死了"的具体成因 ────────────────────────────────
+
+test('回归·消息包裹层不得打标（红竖线跑到窗口左缘的成因）', () => {
+  // data-chat-flow-kind 挂在**整列宽**的 flowItem 上，气泡在内部靠右。
+  // 给它加左侧竖条会被画到窗口最左缘、与内容脱节。
+  assert.equal(classifyAttrs({ 'data-chat-flow-kind': 'user' }), null);
+  assert.equal(classifyAttrs({ 'data-chat-flow-kind': 'assistant' }), null);
+  assert.equal(classifyAttrs({ 'data-kind': 'user' }), null);
+  assert.equal(classifyAttrs({ 'data-kind': 'message' }), null);
+});
+
+test('回归·工具行插槽不得进控件类别（斜杠菜单被涂灰的成因）', () => {
+  // left/right/dock/overlay 装的是加号按钮与斜杠命令触发器等原生控件；
+  // 给它们上色会波及弹出的菜单。
+  for (const slot of [
+    'conversation.input.left',
+    'conversation.input.right',
+    'conversation.input.dock',
+    'conversation.input.overlay',
+    'conversation.input.attachments',
+  ]) {
+    assert.equal(classifyAttrs({ 'data-slot': slot }), null, `${slot} 不得被染色`);
+  }
+});
+
+test('回归·默认只染图标与短标签，不染摘要正文', () => {
+  const css = buildStylesheet({ thinking: { light: '#8C4356', dark: '#CCA4E3' } });
+
+  // 必须：图标、短标签（_title 后缀，跨构建稳定）、可见竖条。
+  assert.ok(/\[data-disclosure-header\] svg\{color:/.test(css), '图标要染色');
+  assert.ok(/\[class\*="_title"\]\{color:/.test(css), '短标签要染色');
+  assert.ok(/inset 3px 0 0/.test(css), '竖条要够粗（2px/55% 实测看不见）');
+
+  // 不得：行本体（含摘要与正文）被染。
+  assert.ok(
+    !/\[data-disclosure-row\]\{color:/.test(css),
+    '默认不得染行本体 —— 那会把整段摘要染掉，满屏饱和色',
+  );
+});
+
+test('colorText 开关：打开后才染行本体', () => {
+  const off = buildStylesheet({ thinking: { light: '#8C4356', dark: '#CCA4E3' } });
+  const on = buildStylesheet({ thinking: { light: '#8C4356', dark: '#CCA4E3' } }, { colorText: true });
+  assert.ok(!/\[data-disclosure-row\]\{color:/.test(off), '默认关');
+  assert.ok(/\[data-disclosure-row\]\{color:/.test(on), '打开后要染行本体');
 });

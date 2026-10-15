@@ -96,10 +96,10 @@ test('推理行按 data-variant=think 打标', () => {
   assert.equal(row.getAttribute(SCOPE_ATTR), 'header');
 });
 
-test('消息流项用 stripe 作用域（只加竖条、不改字色）', () => {
+test('消息流包裹层不打标（整列宽，加竖条会脱节）', () => {
   const row = makeElement({ 'data-chat-flow-kind': 'user' });
-  assert.equal(tagElement(row), 'user');
-  assert.equal(row.getAttribute(SCOPE_ATTR), 'stripe');
+  assert.equal(tagElement(row), null, 'flowItem 是整列宽包裹层，不得打标');
+  assert.equal(row.getAttribute(CAT_ATTR), null);
 });
 
 test('轨迹行用 self 作用域', () => {

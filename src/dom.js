@@ -35,7 +35,6 @@ const CANDIDATE_SELECTOR = [
   '[data-tool]',
   '[data-variant="think"]',
   '[data-kind]',
-  '[data-chat-flow-kind]',
   '[data-slot]',
 ].join(',');
 
@@ -44,6 +43,9 @@ const CANDIDATE_SELECTOR = [
  *
  * 见 `css.js` 的作用域表。判断顺序与 `classifyAttrs` 的优先级保持一致。
  *
+ * ⚠️ 没有 `stripe` 分支了：那个作用域服务于用户/助手消息块，已整体删除
+ * （实测会把竖条画到整列左缘、与靠右的气泡脱节）。
+ *
  * @param attrs 属性快照。
  * @returns 作用域名。
  */
@@ -51,7 +53,6 @@ function scopeFor(attrs) {
   if (attrs['data-slot'] !== undefined) return 'tint';
   if (attrs['data-tool'] !== undefined) return 'header';
   if (attrs['data-variant'] === 'think') return 'header';
-  if (attrs['data-chat-flow-kind'] !== undefined) return 'stripe';
   if (attrs['data-kind'] !== undefined) return 'self';
   return 'tint';
 }

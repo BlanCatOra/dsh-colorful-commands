@@ -16,6 +16,9 @@ const zh = {
   masterLabel: '启用着色',
   masterHint: '关闭后立即恢复 DSH 原生配色，设置会保留。',
 
+  colorTextLabel: '正文也染色',
+  colorTextHint: '默认只给图标与短标签上色，正文保持原生（更好读）。开启后连摘要一起染。',
+
   presetLabel: '配色预设',
   presetHint: '预设提供一套完整配色；下面仍可逐个类别覆盖。',
 
@@ -53,8 +56,6 @@ const zh = {
   categorySearch: '搜索',
   categoryWeb: '网络请求',
   categoryOther: '其他工具',
-  categoryUser: '用户消息',
-  categoryAssistant: '助手回复',
 
   controlsTitle: '界面控件',
   controlsHint: '这些是输入框附近的控件（权限选择、模型选择等），可单独着色。',
@@ -62,7 +63,6 @@ const zh = {
   categoryCtlModel: '模型选择',
   categoryCtlPlan: '计划模式',
   categoryCtlActivity: '活动栏',
-  categoryCtlToolbar: '工具行控件',
 
   presetNone: '不预设（仅自定义）',
   presetChinese: '中国传统色',
@@ -78,6 +78,9 @@ const en = {
 
   masterLabel: 'Enable coloring',
   masterHint: 'Turning this off restores the native DSH palette immediately; your settings are kept.',
+
+  colorTextLabel: 'Tint body text too',
+  colorTextHint: 'By default only icons and short labels are tinted so text stays readable. Turn on to tint summaries as well.',
 
   presetLabel: 'Preset',
   presetHint: 'A preset provides a full palette; you can still override individual categories below.',
@@ -116,8 +119,6 @@ const en = {
   categorySearch: 'Search',
   categoryWeb: 'Web requests',
   categoryOther: 'Other tools',
-  categoryUser: 'User messages',
-  categoryAssistant: 'Assistant replies',
 
   controlsTitle: 'Interface controls',
   controlsHint: 'Controls near the composer (permission, model selection) can be colored separately.',
@@ -125,7 +126,6 @@ const en = {
   categoryCtlModel: 'Model select',
   categoryCtlPlan: 'Plan mode',
   categoryCtlActivity: 'Activity bar',
-  categoryCtlToolbar: 'Composer toolbar',
 
   presetNone: 'None (custom only)',
   presetChinese: 'Chinese traditional',
@@ -144,13 +144,10 @@ export const CATEGORY_KEYS = {
   search: 'categorySearch',
   web: 'categoryWeb',
   other: 'categoryOther',
-  user: 'categoryUser',
-  assistant: 'categoryAssistant',
   'ctl-permission': 'categoryCtlPermission',
   'ctl-model': 'categoryCtlModel',
   'ctl-plan': 'categoryCtlPlan',
   'ctl-activity': 'categoryCtlActivity',
-  'ctl-toolbar': 'categoryCtlToolbar',
 };
 
 /** 预设 id → 文案键。 */
