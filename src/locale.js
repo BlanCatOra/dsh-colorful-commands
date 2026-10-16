@@ -53,6 +53,7 @@ const zh = {
   categoryWrite: '写入 / 编辑',
   categorySearch: '搜索',
   categoryWeb: '网络请求',
+  categoryRetry: '重试模型请求',
   categoryOther: '其他工具',
 
   permissionsTitle: '权限等级',
@@ -117,6 +118,7 @@ const en = {
   categoryWrite: 'Writes / edits',
   categorySearch: 'Search',
   categoryWeb: 'Web requests',
+  categoryRetry: 'Model request retry',
   categoryOther: 'Other tools',
 
   permissionsTitle: 'Permission levels',
@@ -146,6 +148,7 @@ export const CATEGORY_KEYS = {
   write: 'categoryWrite',
   search: 'categorySearch',
   web: 'categoryWeb',
+  retry: 'categoryRetry',
   other: 'categoryOther',
   'ctl-permission': 'categoryCtlPermission',
   'ctl-plan': 'categoryCtlPlan',

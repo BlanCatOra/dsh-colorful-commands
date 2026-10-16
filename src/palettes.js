@@ -42,6 +42,8 @@ const SEMANTICS = {
   write: { hue: 150 },
   search: { hue: 172 },
   web: { hue: 230 },
+  // 重试是"等待/重来"语义，用琥珀橙（与"其他工具"的哑褐拉开，也和命令的红色系区分）。
+  retry: { hue: 35, minSaturation: 30 },
   other: { hue: 25, minSaturation: 5, maxSaturation: 45 },
   'ctl-plan': { hue: 285, minSaturation: 18 },
 };

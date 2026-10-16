@@ -17,7 +17,14 @@ import {
 import { buildStylesheet, resolveColors, sanitizeColor, scopedPreviewCss, CAT_ATTR, SCOPE_ATTR } from '../src/css.js';
 import { presetColors, presetColorFor, presetCoverage } from '../src/palettes.js';
 import { CHINESE_COLORS } from '../src/data/chinese-colors.js';
-import { contrast, hueDistance, LIGHT_BG, DARK_BG } from '../src/color-engine.js';
+import {
+  contrast,
+  hueDistance,
+  deltaE,
+  MIN_TIER_DELTA_E,
+  LIGHT_BG,
+  DARK_BG,
+} from '../src/color-engine.js';
 import { commandRisk } from '../src/constants.js';
 import {
   ALL_CATEGORIES,
@@ -201,6 +208,8 @@ test('分类表覆盖全部可配置类别（防止加了类别却忘了映射�
     classifyAttrs({ 'data-slot': 'conversation.input.permission' }, { text: '工作区内修改' }),
     classifyAttrs({ 'data-slot': 'conversation.input.permission' }, { text: '完全权限' }),
     classifyAttrs({ 'data-slot': 'conversation.input.permission' }, { text: 'Auto review' }),
+    // `retry` 只由 CSS Module 类名后缀识别（内核没给语义化属性）。
+    classifyAttrs({ class: 'Sixlwa_retryRow' }),
   ]);
   for (const category of ALL_CATEGORIES) {
     assert.ok(mapped.has(category), `类别 ${category} 没有任何映射能产生它`);
@@ -237,30 +246,28 @@ test('过程组标题（执行了命令/已完成分析）必须有独立作用�
     css.includes(`[${SCOPE_ATTR}="title"]`),
     '必须为过程组标题生成 scope=title 的规则',
   );
-  // 标题文字靠 `_label` 类命中（内核 ProcessGroupHeader 的 className 是
-  // ChatGroupSeat 的 `_label`，不是 `_title`）。
+  // 标题文字靠运行时切出来的标签段命中（见 dom.js 的 splitTitleLabel）。
   assert.ok(
-    /\[data-cc-scope="title"\] \[class\*="_label"\]\{color:/.test(css),
-    '过程组标题的文字必须被染色（而不只是图标）',
+    /\[data-cc-scope="title"\] \[data-cc-part="label"\]\{color:/.test(css),
+    '过程组标题的标签文字必须被染色',
   );
 });
 
-test('带分析正文的过程组标题只染图标（用户反馈"分析正文被错误地上色"）', () => {
+test('标签与详情必须分开染：只染 [data-cc-part="label"]，不染整段 _label', () => {
+  // ⚠️ 用户先反馈"分析正文被错误地上色"，后反馈"上色不完全"。根因同一个：
+  // 内核把「标签 + ' · ' + 详情」拼成**同一个文本节点**。
+  // 只染整段 → 正文被染；整段不染 → 标签也没色。
+  // 正确解是运行时把标签切出来，样式只染那一段。
   const css = buildStylesheet({ thinking: { light: '#8A4B9C', dark: '#B5A0C2' } });
   assert.ok(
-    /\[data-cc-scope="icon"\] svg\{color:/.test(css),
-    'scope=icon 必须给 svg 上色',
+    /\[data-cc-scope="title"\] \[data-cc-part="label"\]\{color:/.test(css),
+    '必须染标签段',
   );
-  // ⚠️ 关键：icon 作用域**绝不能**染文字 —— 内核把「标签 + ' · ' + 分析正文」
-  // 拼在同一个文本节点里，染文字必然连正文一起染。
-  const iconRules = css.split('\n').filter((line) => line.includes('[data-cc-scope="icon"]'));
-  assert.ok(iconRules.length > 0, '必须有 icon 作用域规则');
-  for (const rule of iconRules) {
-    assert.ok(
-      rule.includes(' svg{'),
-      `icon 作用域只能有 svg 规则，不得染文字：${rule}`,
-    );
-  }
+  // 兜底规则：没有详情（无 data-cc-part）时才允许整段染，且必须用 :not(:has(...)) 限定。
+  assert.ok(
+    /\[data-cc-scope="title"\] \[class\*="_label"\]:not\(:has\(\[data-cc-part\]\)\)\{color:/.test(css),
+    '无详情时整段可染，但必须排除已切分的标题',
+  );
 });
 
 test('UI 控件必须连文字一起染色（用户要求：权限选择那个控件文字也改）', () => {
@@ -450,4 +457,59 @@ test('「不预设」只需保证命令与权限仍按等级上色（这是刻�
   for (const cat of ['thinking', 'read', 'write', 'search', 'web', 'other']) {
     assert.ok(!none[cat], `「不预设」下 ${cat} 不该有预设色`);
   }
+});
+
+
+// ── 命令三档必须真的"分得出轻重" ─────────────────────────────────────
+//
+// ⚠️ 这一组是用户"你说你做了 实际没有差异"的回归守卫。第一版给三档各设一个
+// 目标亮度、再让 pickColor 挑最近的，结果三档撞到几乎同一个色（深色主题实测
+// #C45A65 / #C74A4D / #D46A6A），而且**中档比低档更暗**，与"越危险越醒目"相反。
+
+test('命令三档的对比度必须严格单调递增（越危险越醒目）', () => {
+  for (const presetId of ['chinese', 'japanese', 'macaron']) {
+    const pal = presetColors(presetId);
+    for (const [bg, mode] of [[LIGHT_BG, 'light'], [DARK_BG, 'dark']]) {
+      const crs = ['commandLow', 'commandMid', 'commandHigh'].map((c) => contrast(pal[c][mode], bg));
+      assert.ok(
+        crs[0] < crs[1] && crs[1] < crs[2],
+        `${presetId}/${mode} 三档对比度必须递增，实际 ${crs.map((v) => v.toFixed(2)).join(' → ')}`,
+      );
+    }
+  }
+});
+
+test('命令三档相邻色差必须一眼可辨（ΔE 达门槛）', () => {
+  for (const presetId of ['chinese', 'japanese', 'macaron']) {
+    const pal = presetColors(presetId);
+    for (const mode of ['light', 'dark']) {
+      const low = pal.commandLow[mode];
+      const mid = pal.commandMid[mode];
+      const high = pal.commandHigh[mode];
+      assert.ok(
+        deltaE(low, mid) >= MIN_TIER_DELTA_E,
+        `${presetId}/${mode} 低-中 色差不足：ΔE=${deltaE(low, mid).toFixed(1)}`,
+      );
+      assert.ok(
+        deltaE(mid, high) >= MIN_TIER_DELTA_E,
+        `${presetId}/${mode} 中-高 色差不足：ΔE=${deltaE(mid, high).toFixed(1)}`,
+      );
+    }
+  }
+});
+
+test('三档颜色两两不同（不能出现同一个 hex）', () => {
+  for (const presetId of ['chinese', 'japanese', 'macaron']) {
+    const pal = presetColors(presetId);
+    for (const mode of ['light', 'dark']) {
+      const set = new Set(['commandLow', 'commandMid', 'commandHigh'].map((c) => pal[c][mode]));
+      assert.equal(set.size, 3, `${presetId}/${mode} 三档出现了重复色值`);
+    }
+  }
+});
+
+test('deltaE 与对比度的基本性质', () => {
+  assert.equal(deltaE('#000000', '#000000'), 0);
+  assert.ok(deltaE('#000000', '#FFFFFF') > 90, '黑白 ΔE 应该很大');
+  assert.ok(deltaE('#FF0000', '#FF0001') < 1, '几乎相同的色 ΔE 应接近 0');
 });

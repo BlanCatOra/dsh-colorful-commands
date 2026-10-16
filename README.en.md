@@ -15,6 +15,7 @@ Ships with three preset palettes — **Chinese traditional (default)**, **Japane
 | Thinking / reasoning | Reasoning rows (`data-variant="think"`) |
 | Commands | `bash` / `pwsh` |
 | **Command · low/medium/high risk** | `bash` / `pwsh` rows, graded by a risk word list over the command text |
+| **Model request retry** | the retry row (`_retryRow`) |
 | File reads | `read` / `read_image` |
 | Writes / edits | `write` / `edit` / `run_code` |
 | Search | `grep` / `glob` (local search) |

@@ -60,6 +60,7 @@ export const CATEGORIES = [
   'write',
   'search',
   'web',
+  'retry',
   'other',
 ];
 
@@ -108,6 +109,17 @@ export const PERMISSION_LEVELS = {
 };
 
 /** 全部可配置类别（内容 + 控件）。设置卡片按这个顺序渲染。 */
+/**
+ * 重试行的类别。
+ *
+ * ⚠️ 用户反馈「重试模型请求也没有上色」。根因：内核的 `ModelRetryItem` 渲染的是
+ * `<details class="<hash>_retryRow" data-active>` —— 它**只有一个 `data-active`**，
+ * 没有任何语义化的 `data-*` 钩子，所以第一版完全没覆盖它。
+ * 唯一稳定的线索是 CSS Module 的**类名后缀** `_retryRow`（前缀哈希每次构建会变，
+ * 后缀是源码类名，稳定）。因此单独给它一类。
+ */
+export const CATEGORY_RETRY = 'retry';
+
 /** 权限等级类别（用户要求"不同权限等级的颜色应该不同"）。 */
 export const PERMISSION_CATEGORIES = [
   'perm-readonly',
@@ -132,6 +144,7 @@ export const CATEGORY_LABELS = {
   write: '写入 / 编辑',
   search: '搜索',
   web: '网络请求',
+  retry: '重试模型请求',
   other: '其他工具',
   'ctl-permission': '权限选择',
   'ctl-plan': '计划模式',

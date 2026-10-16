@@ -659,3 +659,26 @@ test('回归·scope 晚到后样式必须跟着更新', async () => {
   const expect = Object.values(macaron).flatMap((p) => [p.light, p.dark]);
   assert.ok(expect.some((hex) => after.includes(hex)), '应含马卡龙预设的值');
 });
+
+
+test('生产 bundle 里不得有遗留的诊断探针 / 定时器（曾导致测试挂 15 秒）', async () => {
+  // ⚠️ 真因：调试真机行为时在 `apply` 里加过 `setTimeout(run, 15000)` 的探针，
+  // 忘记删除。测试全绿但**整个套件的耗时从 100ms 涨到 15s** —— 因为 event loop
+  // 被那个定时器挂住了。这类"功能没坏、但代码里留了垃圾"的问题只有静态守卫抓得到。
+  // ⚠️ `dom.js` 里**有一处合法的 setTimeout**（rAF 不可用时的降级调度），
+  // 所以不能全局禁。要禁的是"带秒级延迟的调度"这类探针特征。
+  const code = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8');
+  assert.ok(!/setInterval\s*\(/.test(code), '生产 bundle 不得包含 setInterval');
+  assert.ok(
+    !/setTimeout\s*\([^,]+,\s*(\d{3,})/.test(code),
+    '生产 bundle 不得包含秒级 setTimeout（探针特征；降级调度是 16ms）',
+  );
+  assert.ok(!/TEMP PROBE|colorful-commands\.probe/.test(code), '不得残留调试探针');
+  // 源码侧同一份守卫（避免只改了 src 没重建时漏检）。
+  const src = await readFile(new URL('../src/client.js', import.meta.url), 'utf8');
+  assert.ok(!/TEMP PROBE|colorful-commands\.probe/.test(src), 'src/client.js 不得残留调试探针');
+  assert.ok(
+    !/setTimeout\s*\([^,]+,\s*\d{3,}/.test(src),
+    'src/client.js 不得包含秒级 setTimeout',
+  );
+});

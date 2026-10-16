@@ -137,6 +137,22 @@ const SLOT_CATEGORY = {
 };
 
 /**
+ * 重试行（`<details class="<hash>_retryRow">`）的识别。
+ *
+ * ⚠️ 内核只给它一个 `data-active`，**没有语义化属性**，所以只能看 CSS Module 的
+ * 类名后缀。前缀哈希每次构建会变、后缀是源码类名稳定 —— 这正是 `css.js` 里
+ * `[class*="_title"]` 用的同一套思路。
+ *
+ * @param attrs 属性快照。
+ * @returns 是否为重试行。
+ */
+export function isRetryRow(attrs) {
+  const cls = attrs?.class;
+  if (typeof cls !== 'string') return false;
+  return cls.includes('_retryRow') || cls.includes('_retrySummary') || cls.includes('_retryText');
+}
+
+/**
  * 判断一段文本命中的权限等级。
  *
  * 用户明确要求「不同权限等级的颜色应该不同」。`PermissionSelect` 的触发按钮
@@ -167,6 +183,9 @@ export function permissionLevel(text) {
  */
 export function classifyAttrs(attrs, options = {}) {
   const a = attrs ?? {};
+
+  // 0. 重试行：它没有任何语义化 data-* 属性，只能靠类名后缀识别。
+  if (isRetryRow(a)) return 'retry';
 
   // 1. 插槽锚点优先：控件类与内容类不重叠，先判更具体的。
   const slot = a['data-slot'];
@@ -275,6 +294,7 @@ export function hasTitleDetail(text) {
 export function readAttrs(element) {
   if (element === null || element === undefined || typeof element.getAttribute !== 'function') return {};
   const names = [
+    'class',
     'data-slot',
     'data-process-activity',
     'data-tool',

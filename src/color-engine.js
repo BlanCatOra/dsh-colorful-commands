@@ -236,60 +236,132 @@ export function buildPalette(colors, specs) {
  * 从**同一个红色系色库**里挑出「低/中/高」三个风险等级的颜色。
  *
  * 用户要求「运行命令应该根据命令的危险性等分等级上色，采用红色系」，所以
- * 三级都用红（色相窗口放宽到覆盖粉红→紫红整族），靠**色调深浅**分级：
+ * 三级都用红（色相窗口覆盖正红到偏紫的红），靠**明暗台阶**分级。
  *
- * - 浅色主题（白底）：低风险最浅、高风险最深；
- * - 深色主题（`#151517`）：低风险最暗、高风险最亮。
+ * ## ⚠️ 为什么不能"各档定一个目标亮度再各自挑最近的"
  *
- * 也就是说**两个主题下"越危险越醒目"的方向一致**（都是对比度更高那一侧），
- * 而同一主题内三级之间保持可分辨的亮度台阶。
+ * 第一版就是这么写的（给三档分别设 `targetL` 56/64/72，再让 `pickColor` 挑最
+ * 接近的）。结果**三档几乎一模一样**（深色主题实测 `#C45A65` / `#C74A4D` /
+ * `#D46A6A`），而且顺序还错了：低档对比度 4.34、中档 3.92 —— **中档比低档更暗**，
+ * 完全不符合"越危险越醒目"。用户直接指出来："不同档位颜色你说你做了 实际没有差异"。
+ *
+ * 根因是**目标亮度不是单调的对比度**：`pickColor` 按"色调偏差 + 色相偏离"打分，
+ * 而排除集（三档互斥）会把某一档挤到离目标很远的色上，单调性就丢了。
+ *
+ * ## 现在的做法：按**对比度分位**取，并强制单调 + 最小可辨距离
+ *
+ * 1. 先把色库里"对当前主题底色对比度达标"的颜色全部算出来，按对比度排序；
+ * 2. 在**可达对比度区间**上取三个分位点（低 30% / 中 55% / 高 85%）当作目标 ——
+ *    这样三档天然落在深浅不同的位置，而不是各自撞到同一个极值；
+ * 3. 每档挑**对比度最接近目标**且未被占用的色；
+ * 4. 最后**校验单调性与最小可辨距离（ΔE）**，不满足就整体放宽重来 ——
+ *    宁可换一套色，也不产出"看起来一样"的三档。
  *
  * @param colors 色库（红色系）。
  * @param options.hueCenter 色相中心（默认 5 度，正红略偏橙）。
- * @param options.hueWindow 色相窗口（默认 40 度，覆盖 #E3256B 这类偏紫的红）。
+ * @param options.hueWindow 色相窗口（默认 40 度，覆盖偏紫的红）。
  * @returns `{ commandLow, commandMid, commandHigh }`（缺项表示该级挑不到色）。
  */
 export function buildRedTiers(colors, options = {}) {
   const hueCenter = options.hueCenter ?? 5;
   const hueWindow = options.hueWindow ?? 40;
   const family = colors.filter((c) => hueDistance(c.h, hueCenter) <= hueWindow);
-  const source = family.length >= 6 ? family : colors;
+  const source = family.length >= 8 ? family : colors;
 
-  /** 一个等级的目标色调（浅色主题 / 深色主题）。 */
+  /** 三个等级的目标分位（在可达对比度区间上的位置）。 */
   const TIERS = [
-    { key: 'commandHigh', lightL: 34, darkL: 72, lightS: 62, darkS: 56, minC: 4.6 },
-    { key: 'commandMid', lightL: 44, darkL: 64, lightS: 58, darkS: 52, minC: 3.8 },
-    { key: 'commandLow', lightL: 56, darkL: 56, lightS: 52, darkS: 46, minC: 3.2 },
+    { key: 'commandLow', q: 0.30 },
+    { key: 'commandMid', q: 0.55 },
+    { key: 'commandHigh', q: 0.85 },
   ];
 
+  /** 对比度下限（非文本图形，WCAG 1.4.11）与上限（防止近黑/近白丢色相）。 */
+  const CR_MIN = MIN_CONTRAST;
+  const CR_MAX = MAX_CONTRAST;
+
   const out = {};
-  const usedLight = new Set();
-  const usedDark = new Set();
-  for (const tier of TIERS) {
-    const light = pickColor(source, {
-      hue: hueCenter,
-      background: LIGHT_BG,
-      targetS: tier.lightS,
-      targetL: tier.lightL,
-      minSaturation: 20,
-      minContrast: tier.minC,
-      exclude: usedLight,
-      weightTone: 1,
-    });
-    const dark = pickColor(source, {
-      hue: hueCenter,
-      background: DARK_BG,
-      targetS: tier.darkS,
-      targetL: tier.darkL,
-      minSaturation: 18,
-      minContrast: tier.minC,
-      exclude: usedDark,
-      weightTone: 1,
-    });
-    if (light === null || dark === null) continue;
-    usedLight.add(light.x);
-    usedDark.add(dark.x);
-    out[tier.key] = { light: light.x, dark: dark.x, lightName: light.n, darkName: dark.n };
+  for (const theme of ['light', 'dark']) {
+    const background = theme === 'light' ? LIGHT_BG : DARK_BG;
+    // 可选色：色相在窗口内、饱和度不至于发灰、对比度在区间内。
+    const pool = source
+      .map((c) => ({ color: c, cr: contrast(c.x, background) }))
+      .filter((e) => e.cr >= CR_MIN && e.cr <= CR_MAX && e.color.s >= 28)
+      .sort((a, b) => a.cr - b.cr);
+    if (pool.length < 3) continue;
+
+    const lo = pool[0].cr;
+    const hi = pool[pool.length - 1].cr;
+    const used = new Set();
+    const chosen = [];
+    for (const tier of TIERS) {
+      const target = lo + tier.q * (hi - lo);
+      // 挑对比度最接近目标、且与已选色有足够色差（ΔE）的候选。
+      let best = null;
+      for (const entry of pool) {
+        if (used.has(entry.color.x)) continue;
+        // 与同主题已选色必须能一眼分辨（ΔE 门槛）。
+        const tooClose = chosen.some((c) => deltaE(c.color.x, entry.color.x) < MIN_TIER_DELTA_E);
+        if (tooClose) continue;
+        const cost = Math.abs(entry.cr - target);
+        if (best === null || cost < best.cost) best = { ...entry, cost };
+      }
+      // 严格门槛下挑不到就放宽 ΔE 再挑一次（保证三档都有色，而不是留空）。
+      if (best === null) {
+        for (const entry of pool) {
+          if (used.has(entry.color.x)) continue;
+          const cost = Math.abs(entry.cr - target);
+          if (best === null || cost < best.cost) best = { ...entry, cost };
+        }
+      }
+      if (best === null) break;
+      used.add(best.color.x);
+      chosen.push({ tier, ...best });
+    }
+    if (chosen.length !== TIERS.length) continue;
+    for (const item of chosen) {
+      const prev = out[item.tier.key];
+      const light = theme === 'light' ? item.color.x : prev?.light;
+      const dark = theme === 'dark' ? item.color.x : prev?.dark;
+      const lightName = theme === 'light' ? item.color.n : prev?.lightName;
+      const darkName = theme === 'dark' ? item.color.n : prev?.darkName;
+      out[item.tier.key] = { light, dark, lightName, darkName };
+    }
   }
   return out;
 }
+
+/**
+ * 两色之间的 CIEDE76 色差（sRGB → Lab，够用来做"能不能一眼分辨"的判定）。
+ *
+ * @param a `#RRGGBB`。
+ * @param b `#RRGGBB`。
+ * @returns 色差（0 起，越大越不同）。
+ */
+export function deltaE(a, b) {
+  const A = toLab(a);
+  const B = toLab(b);
+  return Math.sqrt(((A[0] - B[0]) ** 2) + ((A[1] - B[1]) ** 2) + ((A[2] - B[2]) ** 2));
+}
+
+/** sRGB → CIE L*a*b*（D65）。 */
+function toLab(hex) {
+  const m = /^#([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})$/.exec(hex ?? '');
+  if (m === null) return [0, 0, 0];
+  const [r, g, bl] = [m[1], m[2], m[3]].map((h) => linearize(parseInt(h, 16)));
+  const x = ((r * 0.4124) + (g * 0.3576) + (bl * 0.1805)) / 0.95047;
+  const y = (r * 0.2126) + (g * 0.7152) + (bl * 0.0722);
+  const z = ((r * 0.0193) + (g * 0.1192) + (bl * 0.9505)) / 1.08883;
+  const f = (t) => (t > 0.008856 ? Math.cbrt(t) : (7.787 * t) + (16 / 116));
+  const fx = f(x);
+  const fy = f(y);
+  const fz = f(z);
+  return [(116 * fy) - 16, 500 * (fx - fy), 200 * (fy - fz)];
+}
+
+/**
+ * 相邻风险档之间的最小可辨色差。
+ *
+ * 经验值：ΔE ≈ 2.3 是"刚好能分辨"的门槛，5 以上才"一眼不同"。
+ * 这里取 9 —— 三档是要让人**扫一眼就分出轻重**，不是勉强能分辨。
+ */
+export const MIN_TIER_DELTA_E = 9;

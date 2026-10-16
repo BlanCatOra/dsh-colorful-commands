@@ -58,6 +58,15 @@ export const MARK_ATTR = 'data-cc-mark';
 /** 属性名：染色作用点 —— `header`（染折叠表头）或 `self`（染元素自身）。 */
 export const SCOPE_ATTR = 'data-cc-scope';
 
+/**
+ * 属性名：把过程组标题**切分**后，标记"这一段是标签"。
+ *
+ * 见 `dom.js` 的 `splitTitleLabel`：内核把「标签 + `' · '` + 详情」拼成同一个
+ * 文本节点，CSS 无法只染标签。运行时把标签切出来单独包一层带本属性的 `span`，
+ * 样式层就能只染标签、不染详情。
+ */
+export const PART_ATTR = 'data-cc-part';
+
 /** 深浅色分支选择器：与 ui-theme 实际写入 body 的属性一致（内核实测）。 */
 const DARK = 'body[data-ds-dark-theme]';
 
@@ -108,14 +117,17 @@ export function sanitizeColor(value) {
  * | scope | 用于 | 效果 |
  * |---|---|---|
  * | `header` | 工具行、推理行（DisclosureRow） | 表头图标 + 短标签 |
- * | `title` | 过程组标题，且**不带**分析正文 | 该按钮的图标 + 标签文字 |
- * | `icon` | 过程组标题，**带**分析正文 | **只染图标** |
+ * | `title` | 过程组标题 | 该按钮的图标 + **标签文字**（详情不受影响） |
  * | `self` | bash 工具行、轨迹视图行 | 图标 + 短标签 |
  * | `tint` | UI 控件（权限/计划） | 图标**与文字**上色 |
  *
- * ⚠️ `icon` 作用域是为用户反馈"模型分析正文被错误地上色、上色部分太多"加的：
- * 内核把「标签 + `' · '` + 分析正文」拼进**同一个文本节点**
- * （`ProcessGroupHeader` 的 `title`），CSS 无法只染标签，所以带正文时只染图标。
+ * ⚠️ 过程组标题的「标签」与「详情」在内核里是**同一个文本节点**
+ * （`ProcessGroupHeader` 的 `title`）。运行时会先把标签切出来包一层
+ * `[data-cc-part="label"]`（见 `dom.js` 的 `splitTitleLabel`），样式只染那一段 ——
+ * 于是「标签有色、详情保持原生」两个诉求同时成立。
+ *
+ * 历史：曾用 `icon` 作用域整段不染来回避"分析正文被上色"，但那样连标签都没颜色，
+ * 用户反馈"上色不完全"。现在靠切分解决，`icon` 作用域已删除。
  *
  * ⚠️ `tint` 染文字：第一版**曾因染文字出事** —— 当时把 `left`/`right`/`overlay`
  * 这些槽也当成控件（它们装的是加号按钮、斜杠命令触发器等原生控件），结果弹出的
@@ -140,8 +152,6 @@ function categoryBranch(category, color, prefix = '') {
   const header = `${p}${sel}[${SCOPE_ATTR}="header"] ${HEADER_SEL}`;
   // 过程组标题（"执行了命令"）是一个独立 button，没有折叠表头结构。
   const titleScope = `${p}${sel}[${SCOPE_ATTR}="title"]`;
-  // 过程组标题**带分析正文**时：只染图标，文字保持原生。
-  const iconScope = `${p}${sel}[${SCOPE_ATTR}="icon"]`;
   const self = `${p}${sel}[${SCOPE_ATTR}="self"]`;
   const tint = `${p}${sel}[${SCOPE_ATTR}="tint"]`;
 
@@ -166,12 +176,13 @@ function categoryBranch(category, color, prefix = '') {
     //    这是用户反馈"运行命令、执行命令、完成分析等条目颜色没有改变"的那批
     //    —— 它们带 `data-process-activity` 而**不带 `data-tool`**，第一版没覆盖。
     `${titleScope} svg{color:${color}}`,
-    `${titleScope} [class*="_label"]{color:${color}}`,
-
-    // ②b 带分析正文的过程组标题：**只染图标**。
-    //    内核把「标签 + ' · ' + 正文」放在同一个文本节点里，染文字必然会连正文
-    //    一起染（用户反馈"分析正文被错误地上色"）。所以这里只给 svg 上色。
-    `${iconScope} svg{color:${color}}`,
+    //    文字：只染运行时切出来的**标签**那一段（见 dom.js 的 splitTitleLabel）。
+    //    内核把「标签 · 详情」放在同一个文本节点里，直接染 `_label` 会连分析正文
+    //    一起染（用户反馈过"上色部分太多"）；只染 `[data-cc-part="label"]` 则
+    //    标签有色、详情保持原生。
+    `${titleScope} [${PART_ATTR}="label"]{color:${color}}`,
+    //    兜底：标题**没有**详情时（历史/已折叠的组标题就是纯标签）整段都可以染。
+    `${titleScope} [class*="_label"]:not(:has([${PART_ATTR}])){color:${color}}`,
 
     // ③ bash 工具行 / 轨迹行：图标 + 短标签。
     //    bash 行的根元素只有 `data-sample` + `data-variant="bash"`，

@@ -22,8 +22,9 @@
  *
  * @module dsh-colorful-commands/dom
  */
-import { classifyAttrs, hasTitleDetail, readAttrs } from './classify.js';
-import { CAT_ATTR, MARK_ATTR, SCOPE_ATTR } from './css.js';
+import { classifyAttrs, readAttrs } from './classify.js';
+import { TITLE_SEPARATOR } from './constants.js';
+import { CAT_ATTR, MARK_ATTR, PART_ATTR, SCOPE_ATTR } from './css.js';
 
 /**
  * 一次性匹配所有"可能可染色"的元素。
@@ -32,6 +33,11 @@ import { CAT_ATTR, MARK_ATTR, SCOPE_ATTR } from './css.js';
  * 用属性存在性选择器（不取值），所以宿主加新工具名也无需改这里。
  */
 const CANDIDATE_SELECTOR = [
+  // ⚠️ 重试行只能靠类名后缀认：内核只给它 `data-active`，没有语义化属性。
+  // 用户反馈"重试模型请求也没有上色"就是因为它不在任何属性选择器里。
+  '[class*="_retryRow"]',
+  '[class*="_retrySummary"]',
+  '[class*="_retryText"]',
   // ⚠️ `[data-sample]` **必须在内**：bash 工具行（BashRow）的根元素只有
   // `data-sample="bash"` + `data-variant="bash"`，**没有 `data-tool`**
   // —— 这正是"运行命令"一直不上色的根因（详见 classify.js 的说明）。
@@ -90,20 +96,13 @@ function nearestCandidate(node, maxDepth = 24) {
  * （实测会把颜色画到整列左缘、与靠右的气泡脱节）。
  *
  * @param attrs 属性快照。
- * @param options.hasDetail 过程组标题里是否带分析正文（见 `hasTitleDetail`）。
  * @returns 作用域名。
  */
-function scopeFor(attrs, options = {}) {
+function scopeFor(attrs) {
   if (attrs['data-slot'] !== undefined) return 'tint';
   // 过程组标题是一个 `<button>`，不是 DisclosureRow，没有折叠表头结构。
-  // 用 `title` 作用域：染它自己的 svg 与标题文字。
-  //
-  // ⚠️ **带分析正文时降级为 `icon`** —— 用户反馈"分析正文被错误地上色、
-  // 上色部分太多"。内核把「标签 + ' · ' + 正文」放在**同一个文本节点**里，
-  // CSS 没法只染标签；所以带正文时只染图标，文字保持原生。
-  if (attrs['data-process-activity'] !== undefined) {
-    return options.hasDetail === true ? 'icon' : 'title';
-  }
+  // 用 `title` 作用域：染它自己的 svg + **标签**（详情由切分隔开，见 splitTitleLabel）。
+  if (attrs['data-process-activity'] !== undefined) return 'title';
   if (attrs['data-tool'] !== undefined) return 'header';
   if (attrs['data-variant'] === 'think') return 'header';
   // bash 工具行（BashRow）：根元素只有 `data-sample` + `data-variant="bash"`。
@@ -142,6 +141,80 @@ function dangerText(element) {
 }
 
 /**
+ * 把过程组标题里的「标签」与「详情」切开，给标签套一层可由 CSS 命中的 `span`。
+ *
+ * ## 为什么必须动 DOM（这是"上色不完全"的根因）
+ *
+ * 内核 `ProcessGroupHeader`（实测）：
+ *
+ * ```js
+ * const title = detail === "" ? label : `${label}${t("message.turnProcess.separator")}${detail}`;
+ * jsx(TextShimmer, { className: css.label, children: title });
+ * ```
+ *
+ * **标签与详情是同一个字符串**，落在同一个文本节点里。CSS 没有任何办法只染
+ * 前半段。之前为了"别染到分析正文"，只能整段不染（`icon` 作用域）—— 于是
+ * 「准备运行命令 · cd ~/Projects」「正在分析请求 · Actu…」这类带详情的标题
+ * **完全不染色**，用户看到的就是"上色不完全"。
+ *
+ * 现在改成：把文本节点按分隔符切开，标签那半段包进
+ * `<span data-cc-part="label">`，详情留在外面。样式层只染
+ * `[data-cc-part="label"]` —— 标签有色、详情保持原生，两个诉求同时满足。
+ *
+ * ⚠️ 只切**第一个**分隔符：详情里再出现 ` · ` 也属于详情，不能跟着染色。
+ * ⚠️ 该元素每轮都重判（见 `tagElement`），所以内核重渲染后会自动重新切分；
+ *    这里先检查是否已切过，避免重复包裹。
+ * ⚠️ 要处理**多个文本节点**：内核的 `TextShimmer` 在 `active`（流式中）时会把
+ *    同一个 title **渲染两份** —— 一份正常、一份在 `aria-hidden` 的 shimmer
+ *    sweep 里做扫光动画。所以"只有一个文本节点"的假设不成立；只切第一份会让
+ *    动画副本仍然整段着色，也会让切分在流式期间静默失效。这里对**每个**含分隔符
+ *    的文本节点都切一次。
+ *
+ * @param element 过程组标题元素（`data-process-activity`）。
+ * @returns 是否完成切分（无可切内容时返回 false）。
+ */
+function splitTitleLabel(element) {
+  try {
+    if (typeof element.querySelectorAll !== 'function') return false;
+    const label = element.querySelector('[class*="_label"]');
+    if (label === null) return false;
+    // 已经切过：不再重复包裹。
+    if (typeof label.querySelector === 'function' && label.querySelector(`[${PART_ATTR}]`) !== null) {
+      return true;
+    }
+    // 找出**所有**承载标题的文本节点（流式期间 TextShimmer 会渲染两份）。
+    const doc = element.ownerDocument;
+    if (doc === null || doc === undefined || typeof doc.createTreeWalker !== 'function') return false;
+    const walker = doc.createTreeWalker(label, 4 /* NodeFilter.SHOW_TEXT */);
+    const nodes = [];
+    let node;
+    while ((node = walker.nextNode()) !== null) nodes.push(node);
+    if (nodes.length === 0) return false;
+
+    let split = false;
+    for (const textNode of nodes) {
+      const text = textNode.nodeValue;
+      if (typeof text !== 'string' || text === '') continue;
+      const at = text.indexOf(TITLE_SEPARATOR);
+      if (at === -1) continue;
+      const parent = textNode.parentNode;
+      if (parent === null || parent === undefined) continue;
+      // 用 span 包住标签，详情文字原样留在同一个父节点里。
+      const wrapper = doc.createElement('span');
+      wrapper.setAttribute(PART_ATTR, 'label');
+      wrapper.textContent = text.slice(0, at);
+      textNode.nodeValue = text.slice(at);
+      parent.insertBefore(wrapper, textNode);
+      split = true;
+    }
+    return split;
+  } catch {
+    // 只读/结构异常：放弃切分（退回整段不染），不影响其他元素。
+    return false;
+  }
+}
+
+/**
  * 给单个元素打标。
  *
  * ## 幂等，但过程组标题例外（这是"分析正文被上色"的根因）
@@ -156,7 +229,7 @@ function dangerText(element) {
  * 被染上颜色，正是用户反馈的"上色部分太多"。
  *
  * 所以这类元素**每次扫描都重新判定**（数量很少：每轮最多几十个），
- * 让它能随文本变化在 `title` / `icon` 之间切换。
+ * 让它能随文本变化重新切分「标签 / 详情」。
  *
  * @param element 候选元素。
  * @returns 打上的类别 id，或 null（未打标）。
@@ -166,8 +239,15 @@ export function tagElement(element) {
   if (typeof element.getAttribute !== 'function') return null;
 
   const attrs = readAttrs(element);
-  const dynamic = attrs['data-process-activity'] !== undefined;
-  // 幂等：普通元素只处理一次；过程组标题每次都重判（原因见上）。
+  // 幂等：普通元素只处理一次；**判定依据会变的元素**每次都重判。
+  //
+  // 两类必须重判：
+  //  - 过程组标题（`data-process-activity`）：文本会在「标签 · 分析正文」之间来回变；
+  //  - 权限选择控件（`conversation.input.permission`）：**同一个元素**在切换权限等级时
+  //    只改文字，不换节点。用户反馈「4 个权限等级切换后颜色不会跟随切换」就是
+  //    因为这里把它当静态元素、被 `data-cc-mark` 永久冻结成了第一次的颜色。
+  const dynamic = attrs['data-process-activity'] !== undefined
+    || attrs['data-slot'] === 'conversation.input.permission';
   if (!dynamic && element.getAttribute(MARK_ATTR) !== null) return element.getAttribute(CAT_ATTR);
 
   const text = dangerText(element);
@@ -175,8 +255,10 @@ export function tagElement(element) {
   if (category === null) return null;
 
   try {
+    // 过程组标题：把「标签」切出来，才能只染标签、不染详情（见 splitTitleLabel）。
+    if (attrs['data-process-activity'] !== undefined) splitTitleLabel(element);
     element.setAttribute(CAT_ATTR, category);
-    element.setAttribute(SCOPE_ATTR, scopeFor(attrs, { hasDetail: hasTitleDetail(text) }));
+    element.setAttribute(SCOPE_ATTR, scopeFor(attrs));
     element.setAttribute(MARK_ATTR, '');
     return category;
   } catch {

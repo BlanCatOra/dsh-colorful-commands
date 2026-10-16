@@ -52,6 +52,127 @@ function makeElement(attrs = {}, options = {}) {
   return element;
 }
 
+
+/**
+ * 造一个够 `splitTitleLabel` 用的极简文档。
+ *
+ * `splitTitleLabel` 会真的动 DOM（createTreeWalker 找文本节点、createElement +
+ * insertBefore 插入标签段），所以这一组测试不能只靠属性快照，必须有一个能承载
+ * 文本节点、父子关系与插入操作的小实现。
+ *
+ * ⚠️ 刻意实现**真实的文本节点语义**（nodeValue / parentNode / 兄弟顺序），
+ * 因为被测逻辑正是围绕"标签与详情在同一个文本节点里"展开的 —— 用属性桩替掉
+ * 文本节点就等于把 bug 遮住。
+ */
+function makeFakeDoc() {
+  const NODE = { ELEMENT: 1, TEXT: 3 };
+  const leafText = (el) => {
+    let out = '';
+    for (const child of el.childNodes) {
+      out += child.nodeType === NODE.TEXT ? child.nodeValue : leafText(child);
+    }
+    return out;
+  };
+  const matchesSel = (el, selector) => {
+    const part = selector.trim();
+    const attrEq = /^\[([\w-]+)="([^"]*)"\]$/.exec(part);
+    if (attrEq !== null) return el.getAttribute(attrEq[1]) === attrEq[2];
+    const attrAny = /^\[([\w-]+)\]$/.exec(part);
+    if (attrAny !== null) return el.getAttribute(attrAny[1]) !== null;
+    if (part.startsWith('[class*="_')) {
+      const needle = part.slice(9, -2);
+      return typeof el.className === 'string' && el.className.includes(needle);
+    }
+    return false;
+  };
+  const queryAll = (el, selector) => {
+    const out = [];
+    // 真实 DOM 的选择器列表用逗号分隔，必须逐个匹配（`CANDIDATE_SELECTOR` 就是
+    // 这样拼出来的）。不拆逗号会让 `[data-sample],[data-tool],…` 一条都匹配不上。
+    const parts = String(selector).split(',').map((x) => x.trim()).filter((x) => x !== '');
+    const hit = (node) => parts.some((sel) => matchesSel(node, sel));
+    for (const child of el.childNodes) {
+      if (child.nodeType !== NODE.ELEMENT) continue;
+      if (hit(child)) out.push(child);
+      out.push(...queryAll(child, selector));
+    }
+    return out;
+  };
+  const mkElement = (tag, className = '') => {
+    const el = {
+      nodeType: NODE.ELEMENT,
+      tagName: tag,
+      className,
+      childNodes: [],
+      attrs: {},
+      parentNode: null,
+      ownerDocument: null,
+      get textContent() { return leafText(el); },
+      set textContent(v) {
+        el.childNodes = [];
+        if (v !== '') el.insertBefore(mkText(v), null);
+      },
+      getAttribute(n) { return Object.hasOwn(el.attrs, n) ? el.attrs[n] : null; },
+      setAttribute(n, v) { el.attrs[n] = v; },
+      removeAttribute(n) { delete el.attrs[n]; },
+      appendChild(c) { el.childNodes.push(c); c.parentNode = el; return c; },
+      insertBefore(node, ref) {
+        const at = ref === null ? el.childNodes.length : el.childNodes.indexOf(ref);
+        el.childNodes.splice(at < 0 ? el.childNodes.length : at, 0, node);
+        node.parentNode = el;
+        return node;
+      },
+      removeChild(node) {
+        const i = el.childNodes.indexOf(node);
+        if (i >= 0) el.childNodes.splice(i, 1);
+        return node;
+      },
+      // 真实 DOM 的 `matches()` 接受逗号分隔的选择器列表，
+      // 而 `nearestCandidate` 正是拿 `CANDIDATE_SELECTOR`（逗号拼接）调它。
+      // 只匹配第一段会让"文本变化后上溯到标题"这条路径静默失效。
+      matches(sel) {
+        return String(sel).split(',').map((x) => x.trim()).filter((x) => x !== '')
+          .some((one) => matchesSel(el, one));
+      },
+      querySelector(sel) { return queryAll(el, sel)[0] ?? null; },
+      querySelectorAll(sel) { return queryAll(el, sel); },
+    };
+    return el;
+  };
+  const mkText = (value) => ({
+    nodeType: NODE.TEXT,
+    nodeValue: value,
+    parentNode: null,
+  });
+  const doc = mkElement('#document');
+  // 把文档 API 挂在文档元素本身上：真实 DOM 里 `element.ownerDocument` 拿到的是
+  // 一个**同时具备** createElement / createTreeWalker 的对象，测试必须如实模拟，
+  // 否则被测代码里的 `ownerDocument.createElement` 会拿到 undefined（第一版就是
+  // 因为把 API 放在一个中间对象、ownerDocument 指到了别处而假失败）。
+  doc.createElement = (tag) => {
+    const el = mkElement(tag);
+    el.ownerDocument = doc;
+    return el;
+  };
+  doc.createTextNode = mkText;
+  doc.createTreeWalker = (root, _what) => {
+    const flat = [];
+    const walk = (el) => {
+      for (const child of el.childNodes) {
+        if (child.nodeType === NODE.TEXT) flat.push(child);
+        else walk(child);
+      }
+    };
+    walk(root);
+    let i = -1;
+    return { nextNode: () => (++i < flat.length ? flat[i] : null) };
+  };
+  doc.mkElement = mkElement;
+  doc.mkText = mkText;
+  doc.NODE = NODE;
+  return doc;
+}
+
 /** 极简选择器匹配：只支持 `[attr]` 与 `[attr="value"]`，够本测试用。 */
 function matchesSimple(element, selector) {
   return selector.split(',').some((part) => {
@@ -122,17 +243,24 @@ test('过程组标题是"动态"元素：文本变化后必须重新判定作用
   // ⚠️ 这是"分析正文被错误地上色"的**真正根因**：过程组标题打标时正文还没流式
   // 到达，作用域被定成 title（染文字）；等到内核把「标签 · 分析正文」拼进来时，
   // 元素已带 MARK_ATTR，旧实现直接跳过 —— 于是正文被染色且永不纠正。
-  const el = makeElement({ 'data-process-activity': 'thinking' }, { text: '正在分析请求' });
+  const doc = makeFakeDoc();
+  const el = doc.createElement('button');
+  el.setAttribute('data-process-activity', 'thinking');
+  const label = doc.createElement('span');
+  label.className = 'x_label';
+  label.textContent = '正在分析请求';
+  el.appendChild(label);
+
   tagElement(el);
-  assert.equal(el.getAttribute(SCOPE_ATTR), 'title', '初始只有标签：染文字');
+  assert.equal(el.getAttribute(SCOPE_ATTR), 'title', '初始只有标签：可整段染');
+  assert.equal(el.querySelector('[data-cc-part="label"]'), null, '无详情时不需要切分');
+
   // 正文到达（内核改 textNode.nodeValue，不产生 childList 记录）。
-  el.text = '正在分析请求 · 我先看看这个 DOM 结构再决定';
+  label.textContent = '正在分析请求 · 我先看看这个 DOM 结构再决定';
   tagElement(el);
-  assert.equal(el.getAttribute(SCOPE_ATTR), 'icon', '正文到达后必须改成只染图标');
-  // 组关闭后正文消失，应能回到 title。
-  el.text = '正在分析请求';
-  tagElement(el);
-  assert.equal(el.getAttribute(SCOPE_ATTR), 'title', '正文消失后应回到染文字');
+  const part = el.querySelector('[data-cc-part="label"]');
+  assert.ok(part !== null, '正文到达后必须切出标签段');
+  assert.equal(part.textContent, '正在分析请求');
 });
 
 test('普通元素仍然只处理一次（动态重判不得变成全量重扫）', () => {
@@ -153,16 +281,14 @@ test('聚合过程组标题（执行了命令）必须拿到颜色', () => {
   assert.equal(tagElement(running), 'commandMid', '聚合标题里的危险命令也要按风险分级');
 });
 
-test('过程组标题带分析正文时降级为只染图标', () => {
-  // 内核把「标签 + ' · ' + 分析正文」放在同一个文本节点里。
+test('过程组标题一律用 title 作用域（标签与详情靠切分区分，不再整段不染）', () => {
   const withDetail = makeElement({ 'data-process-activity': 'reading' }, { text: '正在分析请求 · 我看看这个 DOM 结构' });
-  assert.equal(withDetail.getAttribute(SCOPE_ATTR), null, '尚未打标');
   tagElement(withDetail);
-  assert.equal(withDetail.getAttribute(SCOPE_ATTR), 'icon', '带正文时只染图标，避免正文被上色');
+  assert.equal(withDetail.getAttribute(SCOPE_ATTR), 'title');
 
   const pureLabel = makeElement({ 'data-process-activity': 'commands' }, { text: '执行了命令' });
   tagElement(pureLabel);
-  assert.equal(pureLabel.getAttribute(SCOPE_ATTR), 'title', '纯标签时标签与图标一起染');
+  assert.equal(pureLabel.getAttribute(SCOPE_ATTR), 'title');
 });
 
 test('插槽锚点用 tint 作用域（控件不加竖条）', () => {
@@ -287,14 +413,19 @@ test('观察器必须订阅 characterData（否则正文流式到达时不会重
   try {
     // 真实结构：<button data-process-activity><span class="_label">文本</span></button>
     // 文本节点挂在 label 上，data-process-activity 在外层 button 上。
-    const label = makeElement({}, { text: '正在分析请求' });
-    const title = makeElement({ 'data-process-activity': 'thinking' }, { children: [label] });
-    label.parentNode = title;
-    const doc = {
-      body: makeElement({}, { children: [title] }),
-      querySelectorAll: () => [],
-      documentElement: null,
-    };
+    // 用 makeFakeDoc 建真实节点树：切分逻辑要真的 createTreeWalker + insertBefore。
+    const fd = makeFakeDoc();
+    const title = fd.createElement('button');
+    title.setAttribute('data-process-activity', 'thinking');
+    const label = fd.createElement('span');
+    label.className = '_7s-ua_label';
+    label.textContent = '正在分析请求';
+    title.appendChild(label);
+    const body = fd.createElement('div');
+    body.appendChild(title);
+    const doc = fd;
+    doc.body = body;
+    doc.documentElement = null;
 
     const stop = startObserver({ document: doc });
     assert.equal(instances.length, 1, '必须建立一个观察器');
@@ -311,14 +442,18 @@ test('观察器必须订阅 characterData（否则正文流式到达时不会重
 
     // 模拟内核把正文拼进文本节点：派发一条 characterData 记录，
     // target 是**文本节点**（与真实 DOM 一致），其父元素是 label。
-    label.text = '正在分析请求 · 我先看看这个 DOM 结构再决定';
-    const textNode = { nodeType: 3, parentNode: label };
+    const textNode = label.childNodes[0];
+    textNode.nodeValue = '正在分析请求 · 我先看看这个 DOM 结构再决定';
     instances[0].callback([{ type: 'characterData', target: textNode }]);
 
+    // 正文到达后必须**重新切分**：标签进 [data-cc-part="label"]，详情留在外面。
+    const part = title.querySelector('[data-cc-part="label"]');
+    assert.ok(part !== null, 'characterData 记录必须上溯到 title 并重新切分标签');
+    assert.equal(part.textContent, '正在分析请求', '切出来的必须是标签部分');
     assert.equal(
-      title.getAttribute(SCOPE_ATTR),
-      'icon',
-      'characterData 记录必须上溯到 title 并重判为"只染图标"',
+      title.querySelector('[class*="_label"]').textContent,
+      '正在分析请求 · 我先看看这个 DOM 结构再决定',
+      '详情必须仍留在标题里（只是不进标签段）',
     );
     stop();
   } finally {
@@ -326,4 +461,142 @@ test('观察器必须订阅 characterData（否则正文流式到达时不会重
     if (prevRAF === undefined) delete globalThis.requestAnimationFrame;
     else globalThis.requestAnimationFrame = prevRAF;
   }
+});
+
+
+test('过程组标题：标签被切出来单独成段，详情不在其中（"上色不完全"的回归守卫）', () => {
+  // ⚠️ 内核把「标签 + ' · ' + 详情」拼成**同一个文本节点**，CSS 无法只染标签。
+  // 之前用"整段不染"回避，结果带详情的标题（"准备运行命令 · cd ~/P"）完全没颜色，
+  // 用户反馈"上色不完全"。现在必须在运行时把标签切出来。
+  const doc = makeFakeDoc();
+  const title = doc.createElement('button');
+  title.setAttribute('data-process-activity', 'commands');
+  const label = doc.createElement('span');
+  label.className = 'x_label';
+  label.textContent = '准备运行命令 · cd ~/Projects/foo';
+  title.appendChild(label);
+
+  tagElement(title);
+
+  const part = title.querySelector('[data-cc-part="label"]');
+  assert.ok(part !== null, '必须切出带 data-cc-part="label" 的标签段');
+  assert.equal(part.textContent, '准备运行命令', '标签段只含标签，不含详情');
+  assert.ok(
+    title.textContent.includes('cd ~/Projects/foo'),
+    '详情必须仍然留在标题里（只是不被染色）',
+  );
+});
+
+test('过程组标题：没有详情时不切分（纯标签整段可染）', () => {
+  const doc = makeFakeDoc();
+  const title = doc.createElement('button');
+  title.setAttribute('data-process-activity', 'commands');
+  const label = doc.createElement('span');
+  label.className = 'x_label';
+  label.textContent = '执行了命令';
+  title.appendChild(label);
+
+  tagElement(title);
+  assert.equal(title.querySelector('[data-cc-part="label"]'), null, '无详情不该切分');
+});
+
+test('过程组标题：详情里再出现分隔符也只切第一个', () => {
+  const doc = makeFakeDoc();
+  const title = doc.createElement('button');
+  title.setAttribute('data-process-activity', 'thinking');
+  const label = doc.createElement('span');
+  label.className = 'x_label';
+  label.textContent = '正在分析请求 · a · b';
+  title.appendChild(label);
+
+  tagElement(title);
+  const part = title.querySelector('[data-cc-part="label"]');
+  assert.equal(part.textContent, '正在分析请求', '只切第一个分隔符');
+  assert.ok(title.textContent.includes('a · b'), '其余内容属于详情，原样保留');
+});
+
+
+// ── 重试行 ────────────────────────────────────────────────────────────
+
+test('重试行（只有 class 后缀可认）必须被打标', () => {
+  // ⚠️ 内核 ModelRetryItem 渲染 <details class="<hash>_retryRow" data-active>，
+  // **没有任何语义化 data-* 属性**，所以只能靠 CSS Module 的类名后缀识别。
+  // 用户反馈「重试模型请求也没有上色」的根因就是第一版完全没覆盖它。
+  const row = makeElement({ class: 'Sixlwa_retryRow' });
+  assert.equal(tagElement(row), 'retry');
+  assert.equal(row.getAttribute(CAT_ATTR), 'retry');
+});
+
+test('重试行的子部件（retrySummary / retryText）同样可上色', () => {
+  for (const cls of ['Sixlwa_retrySummary', 'Sixlwa_retryText']) {
+    assert.equal(tagElement(makeElement({ class: cls })), 'retry', `${cls} 必须可识别`);
+  }
+});
+
+test('class 里只是恰好含 retry 字样（非 retryRow）不误判', () => {
+  assert.equal(tagElement(makeElement({ class: 'my-retry-button' })), null);
+  assert.equal(tagElement(makeElement({ class: 'retrying' })), null);
+});
+
+test('权限选择控件是动态元素：等级切换后必须重新判定（回归守卫）', () => {
+  // 用户反馈「4 个权限等级切换后颜色不会跟随切换」：同一个元素只改文字、不换节点，
+  // 旧实现把它当静态元素，被 data-cc-mark 永久冻结成第一次的颜色。
+  const el = makeElement({ 'data-slot': 'conversation.input.permission' }, { text: '完全权限' });
+  assert.equal(tagElement(el), 'perm-full');
+  // 切成"仅可查看"：同一个元素，只换文本。
+  el.text = '仅可查看';
+  assert.equal(tagElement(el), 'perm-readonly', '切换等级后必须重新判定');
+  el.text = 'Auto review';
+  assert.equal(tagElement(el), 'perm-auto');
+});
+
+
+test('过程组标题：流式期间 TextShimmer 会渲染两份文本，两份都要切（否则动画副本整段着色）', () => {
+  // ⚠️ 内核 TextShimmer 在 active（流式中）时把同一个 title **渲染两份**：
+  // 一份正常，一份在 aria-hidden 的 shimmer sweep 里做扫光。假设"只有一个文本节点"
+  // 会让切分在流式期间静默失效（真机 probe 实测 hasPart 恒为 false）。
+  const doc = makeFakeDoc();
+  const title = doc.createElement('button');
+  title.setAttribute('data-process-activity', 'commands');
+  const label = doc.createElement('span');
+  label.className = '_7s-ua_label';
+  label.textContent = '准备运行命令 · cd ~/Projects';
+  title.appendChild(label);
+  // 第二份：模拟 shimmer sweep 的副本（同样带 _label 类）。
+  const sweep = doc.createElement('span');
+  sweep.className = '_7s-ua_label _shimmerHighlight';
+  sweep.textContent = '准备运行命令 · cd ~/Projects';
+  label.appendChild(sweep);
+
+  tagElement(title);
+
+  const parts = title.querySelectorAll('[data-cc-part="label"]');
+  assert.equal(parts.length, 2, '两份文本都要切出标签段');
+  for (const part of parts) {
+    assert.equal(part.textContent, '准备运行命令', '每份的标签段只含标签');
+  }
+  // 详情必须都保留（只是不进标签段）。
+  for (const l of title.querySelectorAll('[class*="_label"]')) {
+    assert.ok(String(l.textContent).includes('cd ~/Projects'), '详情必须保留');
+  }
+});
+
+test('过程组标题：已切过的不重复包裹（幂等，避免无限嵌套）', () => {
+  const doc = makeFakeDoc();
+  const title = doc.createElement('button');
+  title.setAttribute('data-process-activity', 'commands');
+  const label = doc.createElement('span');
+  label.className = '_7s-ua_label';
+  label.textContent = '执行了命令 · x';
+  title.appendChild(label);
+
+  tagElement(title);
+  const first = title.querySelectorAll('[data-cc-part="label"]').length;
+  tagElement(title);
+  tagElement(title);
+  assert.equal(
+    title.querySelectorAll('[data-cc-part="label"]').length,
+    first,
+    '重复打标不得嵌套出更多标签段',
+  );
 });
