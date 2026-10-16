@@ -4,7 +4,7 @@
 
 Color the DeepSeek Harness interface **by category**: thinking, commands (**graded by risk**), file reads, writes, search, web requests, other tools. Interface controls near the composer (permission select, plan mode) can be colored separately, and the permission select **recolors itself per access level**.
 
-Ships with three preset palettes — **Chinese traditional**, **Japanese traditional**, and **Macaron** — and lets you set every category by hand, with separate colors for light and dark themes.
+Ships with three preset palettes — **Chinese traditional (default)**, **Japanese traditional**, and **Macaron** — and lets you set every category by hand, with separate colors for light and dark themes.
 
 ---
 
@@ -57,7 +57,7 @@ Per DSH convention, a plugin's own settings live on its **plugin detail page**, 
 The card lets you:
 
 - toggle coloring on/off (off restores the native palette immediately, settings are kept);
-- pick a preset (Chinese traditional / Japanese traditional / Macaron / none);
+- pick a preset (Chinese traditional [default] / Japanese traditional / Macaron / none);
 - set each category: **color picker**, **hex input** (`#RGB` / `#RRGGBB`), **palette swatches**;
 - set light and dark themes **separately**;
 - see a **live preview** — the preview runs the same stylesheet generator as the real thing, so it cannot disagree with the result.

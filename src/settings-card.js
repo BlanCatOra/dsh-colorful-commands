@@ -37,14 +37,18 @@ import {
   Tag,
   Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives';
-import { ALL_CATEGORIES, CATEGORIES, CONTROL_CATEGORIES, PERMISSION_CATEGORIES } from './constants.js';
+import {
+  ALL_CATEGORIES,
+  CATEGORIES,
+  CONTROL_CATEGORIES,
+  PERMISSION_CATEGORIES,
+  PRESETS,
+} from './constants.js';
 import { presetColorFor, presetColors } from './palettes.js';
 import { CATEGORY_KEYS, PRESET_KEYS } from './locale.js';
 import { sanitizeColor, scopedPreviewCss } from './css.js';
 
 /** 预设选择顺序。 */
-const PRESET_IDS = ['chinese', 'japanese', 'macaron', 'none'];
-
 /**
  * 每个类别在当前 draft 下的有效颜色。
  *
@@ -413,7 +417,8 @@ export function ColorfulCommandsCard(props) {
               id: 'cc-preset',
               label: t('presetLabel'),
               value: draft.preset,
-              options: PRESET_IDS.map((id) => ({ value: id, label: t(PRESET_KEYS[id]) })),
+              // 顺序取自 constants.js 的 PRESETS（单一真源），不在这里另抄一份。
+              options: PRESETS.map((id) => ({ value: id, label: t(PRESET_KEYS[id]) })),
               onChange: (value) => setDraft((current) => ({ ...current, preset: value, colors: {} })),
             }),
             jsx('div', { style: { fontSize: '12px', color: 'var(--dsw-alias-label-tertiary)' }, children: t('presetHint') }),

@@ -25,7 +25,9 @@ import {
   CONTROL_CATEGORIES,
   PERMISSION_CATEGORIES,
   CATEGORY_LABELS,
+  PRESETS,
 } from '../src/constants.js';
+import { CATEGORY_KEYS, PRESET_KEYS } from '../src/locale.js';
 
 // ── 分类 ─────────────────────────────────────────────────────────────
 
@@ -399,4 +401,53 @@ test('预设色板是浅拷贝，调用方改它不污染缓存', () => {
 test('presetColorFor 未知预设返回 undefined', () => {
   assert.equal(presetColorFor('nope', 'thinking'), undefined);
   assert.ok(presetColorFor('chinese', 'thinking'));
+});
+
+
+// ── 预设与文案的一致性 ────────────────────────────────────────────────
+
+test('每个预设 id 都有文案键，且每个文案键都对应真实预设（无死项）', () => {
+  for (const id of PRESETS) {
+    assert.ok(Object.hasOwn(PRESET_KEYS, id), `预设 ${id} 缺少文案键`);
+  }
+  for (const id of Object.keys(PRESET_KEYS)) {
+    assert.ok(PRESETS.includes(id), `文案键 ${id} 对应的预设已不存在（死项）`);
+  }
+});
+
+test('不再有与"不预设"重复的 custom 预设（界面上分不清两者）', () => {
+  assert.ok(!PRESETS.includes('custom'), 'custom 与 none 行为相同，不该作为独立预设出现');
+  assert.ok(!Object.hasOwn(PRESET_KEYS, 'custom'), 'custom 的文案键应一并删除');
+});
+
+test('每个类别 id 都有文案键（加类别忘配文案会让界面显示裸 key）', () => {
+  for (const category of ALL_CATEGORIES) {
+    assert.ok(Object.hasOwn(CATEGORY_KEYS, category), `类别 ${category} 缺少文案键`);
+  }
+});
+
+test('三套预设都必须铺满"内容+控件"类别（不预设时这些才不上色）', () => {
+  for (const presetId of PRESETS) {
+    if (presetId === 'none') continue;
+    const { missing } = presetCoverage(presetId);
+    const shouldCover = [...CATEGORIES, ...CONTROL_CATEGORIES];
+    const gaps = shouldCover.filter((c) => missing.includes(c));
+    assert.equal(gaps.length, 0, `预设 ${presetId} 缺少类别：${gaps.join(',')}`);
+  }
+});
+
+test('「不预设」只需保证命令与权限仍按等级上色（这是刻意的）', () => {
+  const none = presetColors('none');
+  // 命令三档固定叠加，与预设无关（用户指定的红色系分级）。
+  for (const cat of ['commandLow', 'commandMid', 'commandHigh']) {
+    assert.ok(none[cat], `「不预设」下 ${cat} 仍必须上色（命令分级是固定的）`);
+  }
+  // 权限四档同理。
+  for (const cat of PERMISSION_CATEGORIES) {
+    assert.ok(none[cat], `「不预设」下 ${cat} 仍必须上色（权限分级是固定的）`);
+  }
+  // 内容类别不铺预设 —— 用户选"仅自定义"时要的正是这个。
+  for (const cat of ['thinking', 'read', 'write', 'search', 'web', 'other']) {
+    assert.ok(!none[cat], `「不预设」下 ${cat} 不该有预设色`);
+  }
 });

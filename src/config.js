@@ -44,7 +44,6 @@ const presetSchema = z.union([
   z.const('chinese'),
   z.const('japanese'),
   z.const('macaron'),
-  z.const('custom'),
 ]).description('内置配色预设');
 
 /**
@@ -52,7 +51,7 @@ const presetSchema = z.union([
  *
  * 字段：
  * - `enabled`：总开关（默认开）。
- * - `preset`：预设 id（默认中国传统色）。
+ * - `preset`：预设 id（**默认中国传统色**，即 `chinese`）。
  * - `colors`：用户逐个类别的覆盖值；只写用户改过的项。
  *
  * ⚠️ **不再有 `colorText` 开关。** 用户 2026-10-16 明确反馈"分析正文被错误地

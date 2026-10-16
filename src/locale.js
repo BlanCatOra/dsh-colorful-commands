@@ -66,11 +66,10 @@ const zh = {
   categoryPermFull: '权限 · 完全权限',
   categoryPermAuto: '权限 · Auto review',
 
-  presetNone: '不预设（仅自定义）',
+  presetNone: '不预设（命令与权限仍按等级上色）',
   presetChinese: '中国传统色',
   presetJapanese: '日本传统色',
   presetMacaron: '马卡龙色系',
-  presetCustom: '自定义',
 };
 
 /** English. */
@@ -131,11 +130,10 @@ const en = {
   categoryPermFull: 'Permission · Full access',
   categoryPermAuto: 'Permission · Auto review',
 
-  presetNone: 'None (custom only)',
+  presetNone: 'None (commands & permissions stay graded)',
   presetChinese: 'Chinese traditional',
   presetJapanese: 'Japanese traditional',
   presetMacaron: 'Macaron',
-  presetCustom: 'Custom',
 };
 
 /** 每个类别 id → 文案键。 */
@@ -163,7 +161,6 @@ export const PRESET_KEYS = {
   chinese: 'presetChinese',
   japanese: 'presetJapanese',
   macaron: 'presetMacaron',
-  custom: 'presetCustom',
 };
 
 /** 注册到 ctx.locale 的字典集合。 */

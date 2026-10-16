@@ -31,10 +31,15 @@ export const PRESET_NONE = 'none';
 export const PRESET_CHINESE = 'chinese';
 export const PRESET_JAPANESE = 'japanese';
 export const PRESET_MACARON = 'macaron';
-export const PRESET_CUSTOM = 'custom';
 
-/** 预设显示顺序。 */
-export const PRESETS = [PRESET_NONE, PRESET_CHINESE, PRESET_JAPANESE, PRESET_MACARON, PRESET_CUSTOM];
+/**
+ * 预设显示顺序。
+ *
+ * ⚠️ 删掉了旧的 `custom`：它和 `none` **行为完全相同**（都不铺预设），
+ * 界面上却多一个选项，用户分不清两者区别。自定义能力本来就在每个类别的
+ * 取色器里，不需要单独一个"预设"来代表它。
+ */
+export const PRESETS = [PRESET_CHINESE, PRESET_JAPANESE, PRESET_MACARON, PRESET_NONE];
 
 /**
  * 着色类别（内容行）。
