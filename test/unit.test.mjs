@@ -582,3 +582,46 @@ test('同预设内不同内容类别不得挑到完全相同的色（去重仍�
     }
   }
 });
+
+
+test('重试/压缩行必须有 plain 作用域，且规则能命中普通 span（不是 button/a）', () => {
+  // ⚠️ 血亏教训：用户截图显示"模型重试的上色没成功" —— 行**打了标**但没颜色。
+  // 根因：内核把重试状态文字渲染成普通 `<span class="…_retryText" role="status">`，
+  // 而它落到默认的 `tint` 作用域，`tint` 只匹配 `:is(button,[role="button"],a)`
+  // —— **一条都命不中**，于是完全不上色。（`role="status"` 不是 `role="button"`。）
+  const css = buildStylesheet({ retry: { light: '#A65F2E', dark: '#D2B48C' } });
+  assert.ok(
+    /\[data-cc-scope="plain"\] :is\(\[class\*="_retryText"\]/.test(css),
+    'plain 作用域必须能命中 _retryText 这个普通 span',
+  );
+  assert.ok(
+    /\[data-cc-scope="plain"\] svg\{color:/.test(css),
+    'plain 作用域必须给图标上色',
+  );
+  // 详情（重试延迟 / 失败原因）必须保持原生，不能被染色。
+  const plainRules = css.split('\n').filter((l) => l.includes('[data-cc-scope="plain"]'));
+  for (const rule of plainRules) {
+    assert.ok(
+      !/retryDetails|_retryDetailLabel/.test(rule),
+      `plain 作用域不得染重试详情：${rule}`,
+    );
+  }
+});
+
+
+test('每个作用域都必须给 svg 上色（漏掉就会出现"文字有色、图标灰"）', () => {
+  // ⚠️ 这个缺陷犯过两次：
+  //  ① `title-part` 分支最初只写了 label 规则、漏了 svg —— 用户截图指出
+  //    "这两个的文字是上色了 图标没有"；
+  //  ② 根因是 `title` 与 `title-part` 在 CSS 里**互斥**，有详情的元素永远不匹配
+  //    前者，所以它拿不到任何图标颜色。
+  // 这里对**每一个**出现的作用域都断言"有 svg 规则"，避免再漏。
+  const css = buildStylesheet({ thinking: { light: '#8A4B9C', dark: '#B5A0C2' } });
+  const scopes = new Set();
+  for (const m of css.matchAll(/\[data-cc-scope="([^"]+)"\]/g)) scopes.add(m[1]);
+  assert.ok(scopes.size >= 4, `作用域数量异常：${[...scopes].join(', ')}`);
+  for (const scope of scopes) {
+    const hasSvg = new RegExp(`\\[data-cc-scope="${scope}"\\][^{]*svg\\{color:`).test(css);
+    assert.ok(hasSvg, `作用域 ${scope} 缺少 svg 规则 → 该作用域下图标不会上色`);
+  }
+});

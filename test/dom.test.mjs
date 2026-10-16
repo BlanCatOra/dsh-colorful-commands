@@ -625,3 +625,90 @@ test('过程组标题：已切过的不重复包裹（幂等，避免无限嵌�
     '重复打标不得嵌套出更多标签段',
   );
 });
+
+
+test('重试行必须是 plain 作用域（落到 tint 会一条 CSS 都命不中 → 打了标却没颜色）', () => {
+  // ⚠️ 用户截图"模型重试的上色没成功"：行有 data-cc-cat="retry" 但颜色没变。
+  // 根因是作用域落到了 tint，而 tint 只匹配 button/a，重试状态文字是普通 span。
+  const row = makeElement({ class: 'Sixlwa_retryRow' });
+  assert.equal(tagElement(row), 'retry');
+  assert.equal(
+    row.getAttribute(SCOPE_ATTR),
+    'plain',
+    '重试行必须用 plain 作用域（tint 只匹配 button/a，命不中状态文字）',
+  );
+});
+
+test('压缩行必须是 plain 作用域', () => {
+  const row = makeElement({ class: 'Sixlwa_compactionRow' });
+  assert.equal(tagElement(row), 'compaction');
+  assert.equal(row.getAttribute(SCOPE_ATTR), 'plain');
+});
+
+
+test('标签段被"包含在"被移除的子树里时，也必须触发重新切分（闪烁根因）', () => {
+  // ⚠️ 血亏：真机 probe 实测 `withDetail:1` 但 `hasPart:false` —— 切分没恢复。
+  // 根因：React 重渲染移除的是**包裹标签段的祖先**（TextShimmer 的 `_text` 层），
+  // 而 `removedNodes` 给的是那个祖先本身。只判断 `node.matches([data-cc-part])`
+  // 就漏掉了"标签段在后代里"这种最常见情形，于是永远不重新切分。
+  //
+  // ⚠️⚠️ 这个测试第一版是**假绿**：它只断言"标签段存在"，而首屏那次切分已经让它
+  // 存在了，所以即使把代码改坏也照样通过。现在**真的**把标签段从 DOM 里删掉，
+  // 再断言"重新长出来"，这样改坏代码必然变红。
+  const prevMO = globalThis.MutationObserver;
+  const prevRAF = globalThis.requestAnimationFrame;
+  const instances = [];
+  class FakeObserver {
+    constructor(cb) { this.cb = cb; instances.push(this); }
+    observe() {}
+    disconnect() {}
+  }
+  globalThis.MutationObserver = FakeObserver;
+  globalThis.requestAnimationFrame = (fn) => fn();
+  try {
+    const fd = makeFakeDoc();
+    const title = fd.createElement('button');
+    title.setAttribute('data-process-activity', 'commands');
+    const label = fd.createElement('span');
+    label.className = '_7s-ua_label';
+    label.textContent = '正在分析请求 · 正文';
+    title.appendChild(label);
+    const body = fd.createElement('div');
+    body.appendChild(title);
+    const doc = fd;
+    doc.body = body;
+    doc.documentElement = null;
+
+    const stop = startObserver({ document: doc });
+    const firstPart = title.querySelector('[data-cc-part="label"]');
+    assert.ok(firstPart !== null, '首屏应已切分');
+
+    // React 重渲染：把 **包含标签段的祖先子树** 整块换掉。
+    // 这里必须真的动 DOM —— 先把旧内容摘出去（模拟 React 重建），
+    // 否则断言只是在验证"首屏那次的残留"。
+    const textWrap = fd.createElement('span');
+    textWrap.className = '_text';
+    // 把标签段放进这个即将被移除的包装层，并从旧父节点摘除。
+    firstPart.parentNode.removeChild(firstPart);
+    textWrap.appendChild(firstPart);
+    // 重建 label 的文本内容（React 会重新塞一个文本节点）。
+    label.textContent = '正在分析请求 · 正文';
+    assert.equal(
+      title.querySelector('[data-cc-part="label"]'),
+      null,
+      '前置条件：标签段此刻确实已不在 DOM 里（否则测试是假绿）',
+    );
+
+    // 报告"被移除的是 textWrap"（祖先），标签段只是它的后代。
+    instances[0].cb([{ type: 'childList', target: label, addedNodes: [], removedNodes: [textWrap] }]);
+    assert.ok(
+      title.querySelector('[data-cc-part="label"]') !== null,
+      '被移除子树里包含标签段时必须重新切分（否则标签时有时无 = 闪烁）',
+    );
+    stop();
+  } finally {
+    globalThis.MutationObserver = prevMO;
+    if (prevRAF === undefined) delete globalThis.requestAnimationFrame;
+    else globalThis.requestAnimationFrame = prevRAF;
+  }
+});

@@ -164,6 +164,26 @@ function categoryBranch(category, color, prefix = '') {
   const partScope = `${p}${sel}[${SCOPE_ATTR}="title-part"]`;
   const self = `${p}${sel}[${SCOPE_ATTR}="self"]`;
   const tint = `${p}${sel}[${SCOPE_ATTR}="tint"]`;
+  /**
+   * 纯文字行（重试模型请求 / 上下文压缩）。
+   *
+   * ⚠️ 这两行只有 CSS Module 类名可认（内核没给语义化属性），而且它们的**状态文字
+   * 是普通 `<span>`**：
+   *
+   * ```jsx
+   * <details class="…_retryRow">
+   *   <summary class="…_retrySummary">
+   *     <span class="…_retryText" role="status">已重试模型请求（1/5）</span>
+   *   </summary>
+   *   <div class="…_retryDetails">…</div>   ← 延迟/失败原因，属于详情
+   * </details>
+   * ```
+   *
+   * 落到 `tint`（只匹配 `:is(button,[role="button"],a)`）会**一条都命不中**，
+   * 表现就是用户看到的"打了标却没颜色"。这里直接命中状态文字那个 span，
+   * 并且**不碰 `_retryDetails`** —— 详情保持原生灰色，符合"标签有色、详情原样"。
+   */
+  const plain = `${p}${sel}[${SCOPE_ATTR}="plain"]`;
 
   /**
    * 标题选择器。
@@ -188,6 +208,12 @@ function categoryBranch(category, color, prefix = '') {
     `${titleScope} svg{color:${color}}`,
     //    无详情（纯标签）时整段染；有详情时只染切出来的标签段。
     `${titleScope} [class*="_label"]{color:${color}}`,
+    //    ⚠️ `title-part` **必须也有 svg 规则**。漏掉它的后果是：带详情的标题
+    //    文字有色、**图标还是灰的**（用户截图直接指出："文字是上色了 图标没有"）。
+    //    背景：`title` 分支有 svg 规则、`title-part` 分支最初只写了 label 规则，
+    //    而这两个作用域在 CSS 里是**互斥**的 —— 有详情的元素永远不匹配 `title`，
+    //    所以它的图标拿不到任何颜色。
+    `${partScope} svg{color:${color}}`,
     `${partScope} [${PART_ATTR}="label"]{color:${color}}`,
 
     // ③ bash 工具行 / 轨迹行：图标 + 短标签。
@@ -203,6 +229,11 @@ function categoryBranch(category, color, prefix = '') {
     //    特异度 (0,3,0) 高于 Button 的 (0,1,0)，所以能覆盖。
     `${tint} svg{color:${color}}`,
     `${tint} :is(button,[role="button"],a){color:${color}}`,
+
+    // ⑤ 纯文字行（重试 / 压缩）：图标 + 状态文字。
+    //    只命中状态文字与按钮，**不命中 `_retryDetails`** —— 详情保持原生配色。
+    `${plain} svg{color:${color}}`,
+    `${plain} :is([class*="_retryText"],summary,[class*="_compactionButton"]){color:${color}}`,
   ].join('\n');
 }
 

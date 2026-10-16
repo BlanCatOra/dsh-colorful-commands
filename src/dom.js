@@ -22,7 +22,13 @@
  *
  * @module dsh-colorful-commands/dom
  */
-import { classifyAttrs, hasTitleDetail, readAttrs } from './classify.js';
+import {
+  classifyAttrs,
+  hasTitleDetail,
+  isCompactionRow,
+  isRetryRow,
+  readAttrs,
+} from './classify.js';
 import { TITLE_SEPARATOR } from './constants.js';
 import { CAT_ATTR, MARK_ATTR, PART_ATTR, SCOPE_ATTR } from './css.js';
 
@@ -123,6 +129,10 @@ function scopeFor(attrs, options = {}) {
   // 它的结构是「根元素 + leading svg + `_title` 标签」，正是 `self` 作用域的形状。
   if (attrs['data-sample'] !== undefined || attrs['data-variant'] !== undefined) return 'self';
   if (attrs['data-kind'] !== undefined) return 'self';
+  // 重试行 / 压缩行：只有类名钩子，且状态文字是**普通 span**
+  // （`<summary><span class="…_retryText">`），不是 button/a ——
+  // 落到 `tint`（只匹配 button/a）会一条都命不中，表现是"打了标却没颜色"。
+  if (isRetryRow(attrs) || isCompactionRow(attrs)) return 'plain';
   return 'tint';
 }
 
@@ -407,8 +417,19 @@ export function startObserver(options = {}) {
               let mine = false;
               try {
                 if (node.nodeType === 1) {
-                  mine = typeof node.matches === 'function'
-                    && node.matches(`[${PART_ATTR}]`);
+                  // ⚠️ 不能只判断"被移除的**就是**我的标签段"。
+                  // React 重渲染时移除的往往是**包含**它的上层子树
+                  // （如 TextShimmer 的 `_content` / `_text` 包装层），
+                  // 此时 `removedNodes` 里直接给的是那个祖先，标签段只是后代。
+                  // 只比对 `node.matches()` 会漏掉这种最常见的情况，
+                  // 于是永远不重新切分 → 标签时有时无、正文时而被整段染色
+                  // （用户看到的"闪烁"）。
+                  // 因此改成"**包含**标签段也算"，对整个被移除子树做一次查询。
+                  const isPart = (el) => typeof el.matches === 'function'
+                    && el.matches(`[${PART_ATTR}]`);
+                  mine = isPart(node)
+                    || (typeof node.querySelector === 'function'
+                        && node.querySelector(`[${PART_ATTR}]`) !== null);
                 }
               } catch {
                 mine = false;
