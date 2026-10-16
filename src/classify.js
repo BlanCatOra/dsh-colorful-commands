@@ -180,6 +180,47 @@ export function usageCategory(text) {
 }
 
 /**
+ * 是否为 composer dock 里的 **tokens 用量药丸**（用户明确要求不上色）。
+ *
+ * ## 为什么要单独判（真机实测 2026-10-17）
+ *
+ * dock 里并排两颗按钮，**都带 `%`**，但语义完全不同：
+ *
+ * | 按钮 | aria-label | 用户要求 |
+ * |---|---|---|
+ * | 上下文进度圈 | `上下文已用 29%` | **四档上色** |
+ * | tokens 药丸 | `695M tok · 缓存命中 98%` | **不上色**（原话：「底部 tokens 数字不上色」） |
+ *
+ * 只按"aria-label 含 %"判定会把 tokens 药丸一起染上色 —— 直接违背用户偏好。
+ *
+ * 判据取内核 locale 里的固定词（`stats.cacheHit` =「缓存命中」、
+ * `stats.dialog.usageTitle` =「Token 用量」、`message.tokensPerSecond`
+ * =「{tps} tok/s」），跨中英文都覆盖：
+ *   - 中文：`tok`（小写，内核原样用）/ `Token` / `缓存命中` / `用量`
+ *   - 英文：`tok` / `Token` / `cache hit` / `usage`
+ *
+ * ⚠️ 刻意**不**用"含 `tok`"之外的结构判据：tokens 药丸与进度圈共享
+ * `svg{stroke:currentColor}` + label span 的形状，只有文案能区分。
+ *
+ * @param attrs 属性快照。
+ * @param usageText 元素自身的 aria-label。
+ * @returns 是否为 tokens 药丸（true = 不上色）。
+ */
+export function isTokensPill(attrs, usageText) {
+  const a = attrs ?? {};
+  const cls = typeof a.class === 'string' ? a.class : '';
+  // 类名后缀是内核源码类名（真机实测 `bGnI3G_pill`），作为第一道判据。
+  if (cls.includes('_pill')) return true;
+  const text = typeof usageText === 'string' ? usageText : '';
+  if (text === '') return false;
+  const lower = text.toLowerCase();
+  return lower.includes('tok')
+    || lower.includes('token')
+    || text.includes('缓存命中')
+    || text.includes('用量');
+}
+
+/**
  * 消息尾部（turn-tail）里，哪些子块应该被染色。
  *
  * 真机结构（2026-10-17 CDP 实测）：
@@ -241,30 +282,52 @@ function isEmptyActionsRow(attrs) {
 }
 
 /**
- * 是否为消息尾部的「已完成 · 用时 xxx」状态元素。
+ * 是否为消息尾部/过程区的「已完成 · 用时 xxx」状态元素。
  *
- * ## 真机结构（2026-10-17 从运行中的应用读出的真实 DOM）
+ * ## 真机结构（2026-10-17 **读内核源码**核实，比 DOM 探针更权威）
  *
- * ```html
- * <span class="TrFNTq_visuallyHidden" role="status">已完成</span>
+ * 内核 `dsh-client-ui-chat` 的 `TurnProcessNodeView`（源码：
+ * `src/client/chat/TurnProcessNodeView.js`）渲染的是：
+ *
+ * ```jsx
+ * <>
+ *   <span class="…_visuallyHidden" role="status" aria-live="polite">{announcement}</span>
+ *   <button class="…_root" data-turn-process={n} data-turn-process-messages={…} …>
+ *     <span class="…_label">{label}{duration…}</span>
+ *     <IconChevronDownOutlineRegular />
+ *   </button>
+ * </>
  * ```
  *
- * ⚠️ 内核把"已完成"放在一个**视觉隐藏**的 span 里（`_visuallyHidden`，给屏幕
- * 阅读器播报用），真正的可见文案由相邻元素渲染。用户要求这行用**成功色
- * （绿色系）**，且"不要太鲜艳抢眼"。
+ * `label` 来自 `t("message.turnProcess.worked")`（=「已完成」）或
+ * `t("message.turnProcess.took")`（=「已完成，用时 」），duration 是
+ * 「3分54秒」这类分片。**用户看到的「已完成 · 用时 xxx」就是这个 button 里的
+ * `_label`。**
  *
- * ⚠️ **判据必须跨语言**：不能匹配 `已完成` 这个中文串 —— 切到英文界面就失效。
- * 这里用 `role="status"` + 类名含 `visuallyHidden` 的组合：
- *  - 重试行也有 `role="status"`，但它是 `_retryText`，**不含** `visuallyHidden`，
- *    两者由此区分开（重试行有自己独立的 `retry` 类别）。
+ * ⚠️ **旧实现为什么必然不生效**：它要求 class 含 `visuallyHidden`，命中的是
+ * 上面那个 `role="status"` 的**视觉隐藏副本**（`clip:rect(0 0 0 0);width:1px`）。
+ * 给一个看不见的元素上色，屏幕上当然没有任何变化 —— 这正是用户反馈
+ * 「已完成 · 用时 xxx 颜色未生效」的根因。
+ *
+ * ⚠️ **新判据用 `data-turn-process`**：它是内核自己写在可见 button 上的
+ * 语义化属性（带 turn 编号），**不依赖任何类名哈希**，也**不依赖中文文案**
+ * （切英文界面照样成立）。
+ *
+ * ⚠️ **必须与重试行/错误行区分**：它们也带 `role="status"`
+ * （`_retryText` 有，`_turnErrorRow` 有），但**都不带 `data-turn-process`**，
+ * 且它们有自己独立的 `retry` 类别。
  *
  * @param attrs 属性快照。
- * @returns 是否为尾部"已完成"状态元素。
+ * @returns 是否为「已完成 · 用时」的可见宿主元素。
  */
 function isTurnTailStatus(attrs) {
-  const cls = attrs?.class;
-  if (typeof cls !== 'string' || !cls.includes('visuallyHidden')) return false;
-  return attrs?.['role'] === 'status';
+  const a = attrs ?? {};
+  // 可见宿主：内核写在 button 上的语义化属性（真机 + 源码双重确认）。
+  if (typeof a['data-turn-process'] === 'string' && a['data-turn-process'] !== '') return true;
+  // 兼容路径：万一宿主改名，仍认 role=status 的可见元素（不再要求 visuallyHidden）。
+  // ⚠️ 这里刻意**不加** class 含 visuallyHidden 的分支 —— 那个是给屏幕阅读器
+  //    的视觉隐藏副本，给它上色用户看不见（旧实现的根因）。
+  return false;
 }
 
 /**
@@ -438,9 +501,39 @@ export function classifyAttrs(attrs, options = {}) {
   //     必须**排在最前**：`N1-_sG_actions` 这类容器不带任何语义化 data-*，
   //     而且它的祖先恰好带 `data-chat-flow-kind`（会被后面的分支误吞）。
   //     ⚠️ 先判进度圈（它读 aria-label 分档），再判通用的 meta 容器。
-  // 0a-0. 消息尾部的「已完成 · 用时 xxx」——必须排在 turn-tail 容器之前判，
-  //       因为它是**更具体**的形状（容器是它的祖先，两者都会被扫到）。
+  // 0a-0. 「已完成 · 用时 xxx」的**可见**宿主（`data-turn-process`，内核源码确认）。
+  //       必须排在 turn-tail 容器之前判：容器是它的祖先，两者都会被扫到。
   if (isTurnTailStatus(a)) return 'done';
+  // 0a-1. ⚠️⚠️ **上下文进度圈按钮**（缺陷 ② 的真正修法）。
+  //
+  //       真机 + 内核源码（`dsh-client-ui-conversation` 的 `ContextMeter`）：
+  //
+  //         <span class="…_root">
+  //           <button class="…_trigger" aria-label="上下文已用 29%"
+  //                   aria-haspopup="dialog">
+  //             <svg><circle class="…_track"/><circle class="…_fill"/></svg>
+  //             <span>29%</span>
+  //           </button>
+  //         </span>
+  //
+  //       这个 button **自己不带任何 data-*** —— 所以旧实现里
+  //       `classifyAttrs` 走到它时直接返回 `null` → **完全不上色**
+  //       （`[aria-label*="%"]` 只把它捞进候选集，分类阶段没有分支接住它）。
+  //       而且它的父容器 dock 走的是 `isEmptyActionsRow`，读的是 **dock 自己的**
+  //       aria-label（dock 没有）→ 落到 `meta`/`plain` → dock 内没有
+  //       `_title`/`_summary` → 无效果。两处都错。
+  //
+  //       修法：**元素自身的** aria-label 含百分比时直接返回 usageCategory 分档。
+  //       ⚠️ 必须读**自身**的 aria-label（不能像 dock 分支那样读容器的）——
+  //          这正是旧实现失效的第二处原因。
+  //       ⚠️ 必须排除 **tokens 药丸**（真机实测
+  //          `BUTTON{aria-label="695M tok · 缓存命中 98%"}`）：用户明确要求
+  //          「底部 tokens 数字不上色」。它同样含 `%`，靠「tok / 缓存命中 /
+  //          Token / token」字样排除 —— 这些是内核 locale 里的固定词
+  //          （`stats.cacheHit` / `message.tokensPerSecond` / `stats.dialog.usageTitle`）。
+  if (usageCategory(options.usageText) !== null && !isTokensPill(a, options.usageText)) {
+    return usageCategory(options.usageText);
+  }
 
   if (isEmptyActionsRow(a)) {
     const usage = usageCategory(options.usageText);
@@ -599,8 +692,14 @@ export function readAttrs(element) {
     'data-turn-tail',
     'data-composer-dock',
     'aria-label',
-    // ⚠️ `role` 也要读：消息尾部的「已完成」是 `role="status"` 的**视觉隐藏**
-    //    span（给屏幕阅读器播报用），这是它唯一跨语言可靠的判据。
+    // ── 2026-10-17 新增：「已完成 · 用时 xxx」的可见宿主 ──
+    // 内核源码（`TurnProcessNodeView`）把它写在可见 button 上：
+    //   <button data-turn-process="22" data-turn-process-messages="3" …>
+    //     <span class="…_label">已完成，用时 3分54秒</span>
+    //   </button>
+    // ⚠️ 旧实现靠 `class` 含 `visuallyHidden` 找它 —— 那命中给屏幕阅读器的
+    //    视觉隐藏副本（1px、clip），给它上色用户看不见（用户反馈"未生效"的根因）。
+    'data-turn-process',
     'role',
   ];
   const attrs = {};

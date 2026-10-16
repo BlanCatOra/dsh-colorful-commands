@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { tagElement, tagTree, clearTags, startObserver } from '../src/dom.js';
+import { classifyAttrs } from '../src/classify.js';
 import { CAT_ATTR, MARK_ATTR, SCOPE_ATTR } from '../src/css.js';
 
 /**
@@ -882,4 +883,116 @@ test('bash 行：低危命令读不到 fiber 时也必须保持 low（不能误�
 
   assert.equal(tagElement(root), 'commandLow', '没有 fiber 时必须保守判 low');
   assert.equal(root.getAttribute(MARK_ATTR), null, '仍未读到命令 → 不打 mark');
+});
+
+
+// ── 2026-10-17 缺陷 ①：「已完成 · 用时 xxx」不上色 ─────────────────────
+//
+// 真机 + 内核源码双重确认（`dsh-client-ui-chat` 的 `TurnProcessNodeView`）：
+//   <span class="…_visuallyHidden" role="status">已完成</span>   ← 屏幕阅读器副本（看不见）
+//   <button data-turn-process="22" …>
+//     <span class="…_label">已完成，用时 3分54秒</span>
+//   </button>                                                    ← 用户真正看到的
+//
+// 旧实现要求 class 含 `visuallyHidden` → 命中的是上面那个视觉隐藏副本
+// （`clip:rect(0 0 0 0);width:1px;height:1px`）→ 给它上色屏幕上看不见。
+// 这就是用户反馈「已完成 · 用时 xxx 颜色未生效」的根因。
+test('缺陷①：「已完成 · 用时」必须染在**可见**的 data-turn-process 宿主上', () => {
+  const doc = makeFakeDoc();
+  // 照内核源码还原：视觉隐藏副本 + 可见 button。
+  const sr = doc.createElement('span');
+  sr.className = 'TrFNTq_visuallyHidden';
+  sr.setAttribute('role', 'status');
+  sr.textContent = '已完成';
+  const button = doc.createElement('button');
+  button.setAttribute('data-turn-process', '22');
+  button.setAttribute('data-turn-process-messages', '3');
+  const label = doc.createElement('span');
+  label.className = 'Lu6X2a_label';
+  label.textContent = '已完成，用时 3分54秒';
+  button.appendChild(label);
+  const chevron = doc.createElement('svg');
+  button.appendChild(chevron);
+  const root = doc.createElement('div');
+  root.appendChild(sr);
+  root.appendChild(button);
+
+  assert.equal(tagElement(button), 'done', '可见宿主必须被判为 done（成功色）');
+  assert.equal(button.getAttribute(CAT_ATTR), 'done');
+  assert.equal(
+    button.getAttribute(SCOPE_ATTR),
+    'self',
+    '它不是 DisclosureRow，必须用 self 作用域（header 会一条 CSS 都命不中）',
+  );
+  // 视觉隐藏副本**不得**再被当成 done 宿主（旧实现的根因）。
+  assert.equal(tagElement(sr), null, 'visuallyHidden 副本是看不见的，不得作为染色目标');
+});
+
+test('缺陷①：classifyAttrs 不再依赖 visuallyHidden（还原修复本测试必须失败）', () => {
+  // 直接调纯函数：旧判据是「class 含 visuallyHidden + role=status」，
+  // 新判据是「带 data-turn-process」。
+  const withTurnProcess = { 'data-turn-process': '22', class: 'Lu6X2a_root' };
+  assert.equal(classifyAttrs(withTurnProcess), 'done');
+  // 视觉隐藏副本（旧实现唯一命中的形状）现在必须返回 null。
+  const hiddenCopy = { class: 'TrFNTq_visuallyHidden', role: 'status' };
+  assert.equal(classifyAttrs(hiddenCopy), null, '视觉隐藏副本不得再被判为 done');
+});
+
+// ── 2026-10-17 缺陷 ②：上下文进度圈不上色 ────────────────────────────
+//
+// 真机 + 内核源码（`dsh-client-ui-conversation` 的 `ContextMeter`）：
+//   <button class="…_trigger" aria-label="上下文已用 29%" aria-haspopup="dialog">
+//     <svg><circle class="…_track"/><circle class="…_fill"/></svg>
+//     <span>29%</span>
+//   </button>
+//
+// 两处都错：① classifyAttrs 走到这个 button 时返回 null（它不带任何 data-*）；
+// ② isEmptyActionsRow 读的是 dock 容器自己的 aria-label（容器没有）→ meta/plain。
+test('缺陷②：进度圈按钮必须按自身 aria-label 的百分比分档上色', () => {
+  const cases = [
+    ['上下文已用 20%', 'usageLow'],
+    ['上下文已用 40%', 'usageMid'],
+    ['上下文已用 60%', 'usageHigh'],
+    ['上下文已用 70%', 'usageCritical'],
+  ];
+  for (const [label, expected] of cases) {
+    const el = makeElement({ 'aria-label': label });
+    assert.equal(tagElement(el), expected, `进度圈 ${label} 必须分到 ${expected}`);
+    assert.equal(el.getAttribute(SCOPE_ATTR), 'self', '进度圈就是被染的那个元素本身');
+  }
+});
+
+test('缺陷②：tokens 药丸（含 % 但用户要求不上色）绝不能被上色', () => {
+  // 真机实测：dock 里并排两颗按钮都带 %，只有进度圈要染。
+  const pill = makeElement({ class: 'bGnI3G_pill', 'aria-label': '695M tok · 缓存命中 98%' });
+  assert.equal(tagElement(pill), null, 'tokens 药丸必须保持原生配色（用户明确要求）');
+  assert.equal(pill.getAttribute(CAT_ATTR), null);
+  // 英文界面同样不得误伤。
+  const pillEn = makeElement({ class: 'x_pill', 'aria-label': '695M tok · cache hit 98%' });
+  assert.equal(tagElement(pillEn), null, '英文 tokens 药丸同样不得上色');
+});
+
+test('缺陷②：进度圈百分比跨档时必须重判（不能被 data-cc-mark 冻结）', () => {
+  // 内核 ContextMeter 复用同一个 button 节点，只改 aria-label。
+  // 用户分档 <35 绿 / 35-49 黄 / 50-67 橙 / >=68 红：不重判就会
+  // "永远是第一档颜色，快到压缩阈值也不变"。
+  const el = makeElement({ 'aria-label': '上下文已用 20%' });
+  assert.equal(tagElement(el), 'usageLow');
+  el.attrs['aria-label'] = '上下文已用 80%';
+  assert.equal(tagElement(el), 'usageCritical', '跨档后必须重判，不得被 mark 冻结');
+  assert.equal(el.getAttribute(MARK_ATTR), null, '会变的元素不得打 mark');
+});
+
+test('缺陷②：classifyAttrs 对自身 aria-label 百分比必须有显式分支', () => {
+  // 这条守的是"分支存在"本身：还原修复（删掉那个分支）→ 立即失败。
+  assert.equal(classifyAttrs({}, { usageText: '上下文已用 29%' }), 'usageLow');
+  assert.equal(classifyAttrs({ 'aria-label': '上下文已用 29%' }, { usageText: '上下文已用 29%' }), 'usageLow');
+  // 但 dock 容器自己没有 aria-label 时不得凭空拿到 usage 类别。
+  assert.equal(classifyAttrs({ 'data-composer-dock': 'true' }), 'meta');
+  // tokens 药丸即使在 options.usageText 里带 % 也不得进 usage 档。
+  assert.equal(
+    classifyAttrs({ class: 'x_pill', 'aria-label': '695M tok · 缓存命中 98%' }, { usageText: '695M tok · 缓存命中 98%' }),
+    null,
+    'tokens 药丸不得进 usage 分档',
+  );
 });

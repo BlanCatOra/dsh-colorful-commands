@@ -27,6 +27,7 @@ import {
   hasTitleDetail,
   isCompactionRow,
   isRetryRow,
+  isTokensPill,
   readAttrs,
   usageCategory,
 } from './classify.js';
@@ -69,9 +70,15 @@ const CANDIDATE_SELECTOR = [
   //    （由 aria-label 里的百分比分档），tokens 数字按用户要求**不上色**。
   '[data-turn-tail]',
   '[data-composer-dock]',
-  // ⚠️ 「已完成」是 `role="status"` 的**视觉隐藏** span（真机实测
-  //    `class="TrFNTq_visuallyHidden" role="status"`），且它**不带** data-* ——
-  //    不加这个选择器就永远扫不到，用户要求的"成功色"就无从谈起。
+  // ⚠️ 「已完成 · 用时 xxx」的**可见**宿主是 `<button data-turn-process="N">`
+  //    （内核源码 `TurnProcessNodeView` 确认）。旧实现扫的是
+  //    `[role="status"]` + class 含 `visuallyHidden` 的视觉隐藏副本 ——
+  //    给它上色屏幕上看不见（用户反馈"未生效"的根因）。
+  //    这里改成扫真正的可见 button。
+  '[data-turn-process]',
+  // ⚠️ 下面这条**保留但已不再承担「已完成」的判定**：内核里 `role="status"`
+  //    的元素还有重试行（`_retryText`）与错误行（`_turnErrorRow`），它们各有
+  //    自己的类别（retry）。classify 侧已不再靠 visuallyHidden 判定 done。
   '[role="status"]',
   // ⚠️ 进度圈那个按钮上**没有** data-* 属性，只有 `aria-label="上下文已用 29%"`，
   //    所以必须用 aria-label 选择器把它捞进候选集（否则永远扫不到）。
@@ -141,6 +148,13 @@ function scopeFor(attrs, options = {}) {
   // ⚠️ 进度圈按钮本身（`aria-label="上下文已用 29%"`）也可能**单独**被扫到
   //    （它不在 `data-composer-dock` 内部时）。它自己就是要染的那个元素。
   if (options.isUsageRing === true) return 'self';
+  // ⚠️ 「已完成 · 用时 xxx」的可见宿主：内核 `TurnProcessNodeView` 的那个
+  //    `<button data-turn-process>`。它内部是 `<span class="…_label">`
+  //    （标签 + 时长数字）+ chevron svg，**没有** `[data-disclosure-header]`
+  //    （不是 DisclosureRow），所以不能用 `header`。
+  //    `self` 作用域的形状正是「元素自身 + svg + `_title`」——这里把
+  //    `[class*="_label"]` 也纳入（见 css.js 的 done/meta 分支）。
+  if (attrs['data-turn-process'] !== undefined) return 'self';
   if (attrs['data-slot'] !== undefined) {
     // turn-tail 插槽锚点是个 `display: contents` 包裹层，只染内部按钮。
     if (attrs['data-slot'] === 'conversation.chat.turnTail') return 'actions';
@@ -399,9 +413,19 @@ export function tagElement(element) {
   //
   //    修法：命令还没读到时不冻结，每次扫描重试；一旦读到就照常冻结。
   const unresolvedBash = isBash && command === null;
+  // ⚠️ 上下文进度圈（`aria-label="上下文已用 N%"`）的百分比**会一直变**：
+  //    内核 `ContextMeter` 复用同一个 button 节点，只改 aria-label 与 svg 的
+  //    strokeDasharray。按用户分档要求（<35 绿 / 35-49 黄 / 50-67 橙 / >=68 红），
+  //    百分比跨档时颜色必须跟着换 —— 若被 MARK_ATTR 冻结成第一次的颜色，
+  //    用户看到的就是"永远是绿色，快到压缩阈值也不变"。
+  //    → 与权限控件同理：百分比元素每轮重判。
+  //    ⚠️ tokens 药丸**不**在此列：用户要求它永不上色（它也不会被分类接住）。
+  const usageLive = usageCategory(typeof attrs['aria-label'] === 'string' ? attrs['aria-label'] : '') !== null
+    && !isTokensPill(attrs, typeof attrs['aria-label'] === 'string' ? attrs['aria-label'] : '');
   const dynamic = attrs['data-process-activity'] !== undefined
     || attrs['data-slot'] === 'conversation.input.permission'
-    || unresolvedBash;
+    || unresolvedBash
+    || usageLive;
   if (!dynamic && element.getAttribute(MARK_ATTR) !== null) return element.getAttribute(CAT_ATTR);
 
   const text = dangerText(element, attrs, command);
@@ -410,7 +434,14 @@ export function tagElement(element) {
   //    根本不存在，所以必须把 aria-label 单独取出来交给 usageCategory 解析。
   //    同时这个按钮也是**要染的那个元素本身**，所以标记 isUsageRing。
   const usageText = typeof attrs['aria-label'] === 'string' ? attrs['aria-label'] : '';
-  const isUsageRing = usageCategory(usageText) !== null;
+  const usageCat = usageCategory(usageText);
+  // ⚠️ tokens 药丸也含 `%`（真机实测 `aria-label="695M tok · 缓存命中 98%"`），
+  //    但用户明确要求「底部 tokens 数字不上色」—— 它不得被标成 isUsageRing，
+  //    否则会拿到 usage* 类别与 self 作用域，把 tokens 文字一起染掉。
+  //    判据与 classify.js 的 isTokensPill 保持一致（类名含 `_pill` 或
+  //    aria-label 含 tok/token/缓存命中/用量）。
+  const tokensPill = usageCat !== null && isTokensPill(attrs, usageText);
+  const isUsageRing = usageCat !== null && !tokensPill;
   const category = classifyAttrs(attrs, {
     text,
     element,
@@ -428,7 +459,9 @@ export function tagElement(element) {
       isUsageRing,
     }));
     // ⚠️ 命令原文还没读到的 bash 行**不打 mark**：留到下一次扫描重判。
-    if (!unresolvedBash) element.setAttribute(MARK_ATTR, '');
+    // ⚠️ 上下文进度圈（百分比会跨档变化）同样**不打 mark**：见上方 usageLive
+    //    的说明 —— 冻结成第一档颜色就是"快到压缩阈值也不变色"的根因。
+    if (!unresolvedBash && !usageLive) element.setAttribute(MARK_ATTR, '');
     return category;
   } catch {
     // 只读/被冻结的 DOM：放弃这一个元素，不影响其他。

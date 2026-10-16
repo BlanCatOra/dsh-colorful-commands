@@ -231,8 +231,21 @@ function categoryBranch(category, color, prefix = '') {
     // ③ bash 工具行 / 轨迹行：图标 + 短标签。
     //    bash 行的根元素只有 `data-sample` + `data-variant="bash"`，
     //    没有 `[data-disclosure-header]`，所以走这条。
+    //    ⚠️ `_label` 也在这条规则里（2026-10-17 缺陷 ①）：内核
+    //    `TurnProcessNodeView` 的「已完成，用时 3分54秒」在
+    //    `<button data-turn-process><span class="…_label">` 里，用的类名后缀
+    //    是 `_label`（**不是** `_title`）。旧实现照抄 bash 行的 `_title` 判据，
+    //    连可见宿主都没找对（它找的是 `visuallyHidden` 的屏幕阅读器副本）。
+    //    ⚠️ `circle` 也在这里：上下文进度圈（`ContextMeter`）是
+    //    `svg{stroke:currentColor}`，给宿主 button 写 color 即可让圆环跟着变 ——
+    //    但**必须先确认是 stroke 而非 fill**（内核源码实测：
+    //    `._zgeDa_fill{fill:none;stroke:var(--dsw-alias-label-tertiary)}`，
+    //    所以写 color 就够了，`svg{color}` 规则会沿继承落到 circle 上）。
+    //    ⚠️ 这里**不能**写成 `] *{`：会连圆环外的百分比文字 span 一起染，
+    //    而用户要求的是"进度圈上色"，文字保持原生更稳。
     `${self} svg{color:${color}}`,
     `${self} [class*="_title"]{color:${color}}`,
+    `${self} [class*="_label"]{color:${color}}`,
 
     // ④ UI 控件：图标**与文字**一起染。
     //    ⚠️ 必须命中真正的 button：[data-slot] 包裹层是 `display:contents`

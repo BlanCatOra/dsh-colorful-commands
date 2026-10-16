@@ -220,19 +220,39 @@ test('分类表覆盖全部可配置类别（防止加了类别却忘了映射�
     // `done` / `meta`：消息尾部（turn-tail）与 composer 底部条，
     // 真机钩子 `data-turn-tail` / `data-composer-dock`（2026-10-17 实测）。
     classifyAttrs({ 'data-turn-tail': '22' }),
-    // 「已完成」：`role="status"` 的视觉隐藏 span（真机实测结构）。
-    classifyAttrs({ class: 'TrFNTq_visuallyHidden', role: 'status' }),
+    // 「已完成 · 用时 xxx」：**可见**宿主是 `<button data-turn-process>`
+    // （内核源码 `TurnProcessNodeView` 确认）。
+    // ⚠️ 2026-10-17 缺陷 ① 修完后，这里已从「class 含 visuallyHidden +
+    //    role=status」（视觉隐藏副本，给它上色用户看不见）改成语义化属性。
+    classifyAttrs({ 'data-turn-process': '22', class: 'Lu6X2a_root' }),
     classifyAttrs({ 'data-composer-dock': 'true' }),
     // 上下文进度圈四档：百分比**只写在 aria-label 里**（真机
     // `aria-label="上下文已用 29%"`）。四个区间各取一个真实值。
-    classifyAttrs({ 'data-composer-dock': 'true' }, { usageText: '上下文已用 20%' }),
-    classifyAttrs({ 'data-composer-dock': 'true' }, { usageText: '上下文已用 40%' }),
-    classifyAttrs({ 'data-composer-dock': 'true' }, { usageText: '上下文已用 60%' }),
-    classifyAttrs({ 'data-composer-dock': 'true' }, { usageText: '上下文已用 70%' }),
+    // ⚠️ 2026-10-17 缺陷 ② 修完后，进度圈走**自身** aria-label 分支
+    //    （不再依赖 dock 容器），所以这里直接给它自身的 aria-label。
+    classifyAttrs({}, { usageText: '上下文已用 20%' }),
+    classifyAttrs({}, { usageText: '上下文已用 40%' }),
+    classifyAttrs({}, { usageText: '上下文已用 60%' }),
+    classifyAttrs({}, { usageText: '上下文已用 70%' }),
   ]);
   for (const category of ALL_CATEGORIES) {
     assert.ok(mapped.has(category), `类别 ${category} 没有任何映射能产生它`);
   }
+  // ⚠️ 反向守卫（缺陷 ①）：视觉隐藏副本**不得**再产生 done。
+  // 旧实现正是靠它"命中"的，而那是屏幕阅读器专用的 1px 元素 ——
+  // 用户反馈"已完成 · 用时 xxx 颜色未生效"的根因。
+  assert.equal(
+    classifyAttrs({ class: 'TrFNTq_visuallyHidden', role: 'status' }),
+    null,
+    'visuallyHidden 副本不得再被判为 done（它是看不见的）',
+  );
+  // ⚠️ 反向守卫（缺陷 ②）：tokens 药丸虽然含 %，但用户要求不上色。
+  assert.equal(
+    classifyAttrs({ class: 'bGnI3G_pill', 'aria-label': '695M tok · 缓存命中 98%' },
+      { usageText: '695M tok · 缓存命中 98%' }),
+    null,
+    'tokens 药丸不得进 usage 分档',
+  );
 });
 
 // ── 颜色安全 ─────────────────────────────────────────────────────────
@@ -731,5 +751,39 @@ test('状态类颜色在三套预设下都必须与内容类互不撞色', () =>
         seen.set(`${theme}:${hex}`, key);
       }
     }
+  }
+});
+
+// ── 2026-10-17 缺陷 ① / ② 的 CSS 侧守卫 ───────────────────────────────
+
+test('缺陷①：「已完成」必须靠 _label 上色（旧实现只写 _title → 一条都命不中）', () => {
+  // 内核 `TurnProcessNodeView` 的可见宿主是
+  //   <button data-turn-process><span class="…_label">已完成，用时 …</span></button>
+  // 类名后缀是 `_label` 而**不是** `_title`。旧 CSS 只写 `${self} [class*="_title"]`，
+  // 于是即使分类判对了也上不到色。
+  const css = buildStylesheet({ done: { light: '#2F6B4F', dark: '#7FC49B' } });
+  assert.ok(
+    /\[data-cc-scope="self"\] \[class\*="_label"\]\{color:/.test(css),
+    'self 作用域必须命中 _label，否则「已完成 · 用时」仍然没有颜色',
+  );
+  assert.ok(
+    /\[data-cc-scope="self"\] svg\{color:/.test(css),
+    'self 作用域必须给图标上色（漏掉就是"文字有色、图标灰"）',
+  );
+});
+
+test('缺陷②：进度圈按分档生成四组 CSS，且都作用在 self 上', () => {
+  // 进度圈按钮不带任何 data-*，它自己就是被染元素 → self 作用域。
+  const tiers = ['usageLow', 'usageMid', 'usageHigh', 'usageCritical'];
+  for (const tier of tiers) {
+    const css = buildStylesheet({ [tier]: { light: '#3F7A4A', dark: '#7EC08C' } });
+    assert.ok(
+      css.includes(`[${CAT_ATTR}="${tier}"]`),
+      `${tier} 必须生成自己的规则`,
+    );
+    assert.ok(
+      /\[data-cc-scope="self"\] svg\{color:/.test(css),
+      `${tier} 必须通过 self 作用域给 svg 上色（进度圈是 svg stroke）`,
+    );
   }
 });
