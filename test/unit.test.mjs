@@ -625,3 +625,13 @@ test('每个作用域都必须给 svg 上色（漏掉就会出现"文字有色�
     assert.ok(hasSvg, `作用域 ${scope} 缺少 svg 规则 → 该作用域下图标不会上色`);
   }
 });
+
+
+test('others 通用命令卡片：只有标题是 compact 时才算压缩', () => {
+  const mk = (title) => ({ querySelector: (sel) => (sel.includes('_title') ? { textContent: title } : null) });
+  assert.equal(classifyAttrs({ 'data-variant': 'others' }, { text: '正在压缩…', element: mk('compact') }), 'compaction');
+  assert.equal(classifyAttrs({ 'data-variant': 'others' }, { text: '正在清空…', element: mk('clear') }), 'other');
+  // 没有 element / querySelector 时必须安全退回，不能抛错。
+  assert.equal(classifyAttrs({ 'data-variant': 'others' }, { text: 'x' }), 'other');
+  assert.equal(classifyAttrs({ 'data-variant': 'others' }, { text: 'x', element: {} }), 'other');
+});

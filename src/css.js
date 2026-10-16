@@ -232,8 +232,15 @@ function categoryBranch(category, color, prefix = '') {
 
     // ⑤ 纯文字行（重试 / 压缩）：图标 + 状态文字。
     //    只命中状态文字与按钮，**不命中 `_retryDetails`** —— 详情保持原生配色。
+    //
+    //    `_title` / `_summary` 是为**进行中的压缩行**加的：它走
+    //    `GenericCommandCard`（标准 DisclosureRow），标题是 `compact`、
+    //    状态文字 `正在压缩…` 在 `_summary` 里。只染 `_title` 的话，
+    //    "正在压缩…" 仍然是灰的 —— 用户看到的还是"压缩中没有上色"。
+    //    （已完成的压缩行两个 class 是 `_compactionTitle`/`_compactionSummary`，
+    //      由 `_compactionButton` 整片覆盖，不受这两条影响。）
     `${plain} svg{color:${color}}`,
-    `${plain} :is([class*="_retryText"],summary,[class*="_compactionButton"]){color:${color}}`,
+    `${plain} :is([class*="_retryText"],[class*="_compactionButton"],[class*="_title"],[class*="_summary"],summary){color:${color}}`,
   ].join('\n');
 }
 

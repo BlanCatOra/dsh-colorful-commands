@@ -712,3 +712,109 @@ test('标签段被"包含在"被移除的子树里时，也必须触发重新切
     else globalThis.requestAnimationFrame = prevRAF;
   }
 });
+
+
+// ── 命令三档：折叠行只有描述，必须从 React fiber 取真实命令 ──────────────
+//
+// ⚠️ 用户反馈"命令的三个颜色层级没有实现"。根因不是配色，是**判定文本取错了**：
+// 内核折叠状态下 bash 行只渲染「描述」（"显示当前工作目录"），真实命令（`pwd`）
+// 只在展开后才进 DOM。拿描述过危险词判定，八条里八条都是 low —— 危险词
+// （`curl`/`chmod -R`/`dd if=`/`mkfs`）全在命令原文里，描述里一个都没有。
+
+test('bash 行：能从 React fiber 读到真实命令原文', () => {
+  const el = makeElement({ 'data-sample': 'bash', 'data-variant': 'bash' }, { text: '显示当前工作目录' });
+  // 造一条与真机一致的 fiber 链：元素 → ... → 带 block 的组件节点。
+  el.__reactFiber$test = {
+    memoizedProps: { className: 'x_root' },
+    return: {
+      memoizedProps: { className: 'x_card' },
+      return: {
+        memoizedProps: {
+          block: { call: { name: 'bash', argsRaw: JSON.stringify({ command: 'dd if=/dev/zero of=/tmp/x bs=1k count=4', description: '写测试镜像' }) } },
+        },
+        return: null,
+      },
+    },
+  };
+  assert.equal(tagElement(el), 'commandHigh', '必须按真实命令(dd if=)判为高危，而不是按描述判低危');
+});
+
+test('bash 行：fiber 读不到时退回可见文本（不得抛错、不得不上色）', () => {
+  const el = makeElement({ 'data-sample': 'bash', 'data-variant': 'bash' }, { text: '列出当前目录内容' });
+  // 没有 fiber：应退回描述文本 -> low，且**必须仍然上色**。
+  assert.equal(tagElement(el), 'commandLow');
+});
+
+test('bash 行：fiber 结构异常/JSON 坏掉时安全降级', () => {
+  const el = makeElement({ 'data-sample': 'bash', 'data-variant': 'bash' }, { text: '随便什么' });
+  el.__reactFiber$test = { memoizedProps: { block: { call: { argsRaw: '{ 这不是合法 JSON' } } }, return: null };
+  assert.equal(tagElement(el), 'commandLow', 'JSON 坏掉必须安全退回，不能抛错');
+
+  const el2 = makeElement({ 'data-sample': 'bash', 'data-variant': 'bash' }, { text: '随便什么' });
+  el2.__reactFiber$test = { memoizedProps: { block: null }, return: null };
+  assert.equal(tagElement(el2), 'commandLow', 'block 为 null 必须安全退回');
+});
+
+test('非 bash 的"命令类"行不得去读 fiber（否则会被别人的 block 劫持）', () => {
+  // ⚠️ 这条测试第一版是**假绿**：用 `data-tool="read"` 断言，但 `read` 分支
+  // 返回 base 后直接 return、**根本不消费判定文本** —— 所以撤掉 `isBash` 限制
+  // 它照样通过，等于什么都没测。
+  // 真正有劫持风险的是"走 commandCategory(text) 的行"，共两条路径：
+  //   ① `data-variant="bash"`（就是要读 fiber 的那个）
+  //   ② `data-kind="tool"` / 过程组 `data-process-activity="commands"`（不读 fiber）
+  // 这里用 ② 来验：它的 fiber 里若挂着 block，不能被误读成 commandHigh。
+  const el = makeElement({ 'data-kind': 'tool' }, { text: '执行了命令' });
+  el.__reactFiber$test = { memoizedProps: { block: { call: { argsRaw: JSON.stringify({ command: 'rm -rf /' }) } } }, return: null };
+  assert.equal(
+    tagElement(el),
+    'commandLow',
+    'kind=tool 行必须按自己的可见文本判定（low），不能被 fiber 里的 rm -rf / 劫持成 commandHigh',
+  );
+
+  // 过程组标题同理。
+  const el2 = makeElement({ 'data-process-activity': 'commands' }, { text: '执行了命令' });
+  el2.__reactFiber$test = { memoizedProps: { block: { call: { argsRaw: JSON.stringify({ command: 'mkfs.ext4 /dev/sda' }) } } }, return: null };
+  assert.equal(tagElement(el2), 'commandLow', '过程组标题不得被 fiber 劫持');
+});
+
+
+// ── 压缩进行中（"压缩中没有上色"）────────────────────────────────────
+//
+// ⚠️ `/compact` 这一行在内核里分两段渲染、用的是**不同组件**：
+//   进行中 → GenericCommandCard（`data-variant="others"`，标题字面量 `compact`）
+//   已完成 → CompactionItem（`class="…_compactionRow"`）
+// 第一版只覆盖了后者，于是"压缩的上色只在压缩完成后才上色"。
+
+test('压缩进行中：靠标题字面量 compact 识别（此时类名里没有 compaction）', () => {
+  const doc = makeFakeDoc();
+  const root = doc.createElement('div');
+  root.setAttribute('data-variant', 'others');
+  root.setAttribute('data-state', 'running');
+  const title = doc.createElement('span');
+  title.className = '_abc_title';
+  title.textContent = 'compact';
+  root.appendChild(title);
+  const summary = doc.createElement('span');
+  summary.className = '_abc_summary';
+  summary.textContent = '正在压缩…';
+  root.appendChild(summary);
+
+  assert.equal(tagElement(root), 'compaction', '进行中的压缩行必须识别为 compaction');
+  // 必须用 plain：header 作用域只染 `_title`（"compact"），而状态文字
+  // "正在压缩…" 在 `_summary` 里 —— 用 header 的话那半句还是灰的，
+  // 用户看到的仍是"压缩中没有上色"。
+  assert.equal(root.getAttribute(SCOPE_ATTR), 'plain', '进行中的压缩行必须整行染（含 _summary）');
+});
+
+test('压缩进行中：别的斜杠命令不得被误判成 compression', () => {
+  const doc = makeFakeDoc();
+  const root = doc.createElement('div');
+  root.setAttribute('data-variant', 'others');
+  const title = doc.createElement('span');
+  title.className = '_abc_title';
+  title.textContent = 'clear';
+  root.appendChild(title);
+
+  assert.equal(tagElement(root), 'other', '通用命令卡片不得被误判为 compaction');
+  assert.equal(root.getAttribute(SCOPE_ATTR), 'header', '普通命令卡片仍用 header（不染结果详情）');
+});

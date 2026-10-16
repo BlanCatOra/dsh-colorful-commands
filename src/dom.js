@@ -123,6 +123,19 @@ function scopeFor(attrs, options = {}) {
   }
   if (attrs['data-tool'] !== undefined) return 'header';
   if (attrs['data-variant'] === 'think') return 'header';
+  // 通用命令卡片（`data-variant="others"`）：它内部就是标准 `DisclosureRow`
+  // （`[data-disclosure-header]` + `_title` + `_summary`）。压缩**进行中**走的
+  // 就是这条路径，所以必须用 `header`。
+  // ⚠️ 这一条**必须排在下面那条 `data-variant !== undefined -> self` 之前**：
+  // 那条是给 bash 行（`data-variant="bash"`）准备的兜底，会把 `others` 也吞掉，
+  // 于是进行中的压缩行落到 `self`、只匹配 `_title` 而**命不中 `_summary`**
+  // —— 表现就是"文字里只有 title 有色、'正在压缩…' 还是灰的"。
+  //    ⚠️ 但**通用命令卡片**里跑的不只有压缩：其他斜杠命令（`/clear` 等）也走
+  //    `data-variant="others"`，它们的 summary 是"结果详情"，应该保持灰色。
+  //    只有压缩这一行的 summary 是**状态文字**（"正在压缩…"），要和标题一起染。
+  if (attrs['data-variant'] === 'others') {
+    return options.category === 'compaction' ? 'plain' : 'header';
+  }
   // bash 工具行（BashRow）：根元素只有 `data-sample` + `data-variant="bash"`。
   // 它**不是 DisclosureRow**（没有 `[data-disclosure-header]`），所以不能用
   // `header` 作用域（那些规则会一条都匹配不到，表现为"上色了但没效果"）。
@@ -134,6 +147,64 @@ function scopeFor(attrs, options = {}) {
   // 落到 `tint`（只匹配 button/a）会一条都命不中，表现是"打了标却没颜色"。
   if (isRetryRow(attrs) || isCompactionRow(attrs)) return 'plain';
   return 'tint';
+}
+
+/**
+ * 从 React 内部记录里读出这一行**真实的命令原文**。
+ *
+ * ## 为什么必须这么做（"命令三档没有差异"的根因）
+ *
+ * 内核折叠状态下的 bash 行**只渲染「描述」**，真实命令并不在 DOM 里：
+ *
+ * ```jsx
+ * // StartedBashRow → ToolRow
+ * normalSummary = terminalBody?.description ?? summary
+ * //                                    ^^^^^^^^^^^ 模型给的自然语言描述，
+ * //                                                例如"显示当前工作目录"
+ * // 真实命令（`pwd`）只在**展开后**的 TerminalBlock 里才进 DOM
+ * ```
+ *
+ * 实测（真机 probe）：行上的可见文字是"显示当前工作目录"「列出当前目录内容」
+ * 「创建测试目录并递归改权限」这类描述。拿这些描述过 `commandRisk`，
+ * **八条里八条都是 low** —— 因为危险词在命令原文里（`curl`、`chmod -R`、
+ * `dd if=`、`mkfs`），描述里一个都没有。于是所有行都染成同一档，
+ * 用户看到的就是"命令的三个颜色层级没有实现"。
+ *
+ * 真实命令可以从 React 挂在元素上的 fiber 节点里读到
+ * （`fiber.return.memoizedProps.block.call.argsRaw`，实测路径见探测记录）。
+ * 这是内核私有结构，所以**每一步都做存在性检查**，任何一步缺失就返回 null、
+ * 退回原来的文本判定 —— 宁可分级不准，也绝不能因为读不到而抛错。
+ *
+ * @param element 行根元素。
+ * @returns 命令原文（JSON 里的 `command` 字段），读不到时返回 null。
+ */
+function commandTextFromFiber(element) {
+  try {
+    const fiberKey = Object.keys(element).find((k) => k.startsWith('__reactFiber'));
+    if (fiberKey === undefined) return null;
+    let node = element[fiberKey];
+    for (let depth = 0; depth < 20 && node !== null && node !== undefined; depth += 1) {
+      const props = node.memoizedProps;
+      if (props !== null && typeof props === 'object' && props.block !== undefined && props.block !== null) {
+        const block = props.block;
+        const raw = block.call !== undefined && block.call !== null
+          ? block.call.argsRaw
+          : block.argsRaw;
+        if (typeof raw !== 'string' || raw === '') {
+          node = node.return;
+          continue;
+        }
+        const parsed = JSON.parse(raw);
+        const command = parsed?.command;
+        if (typeof command === 'string' && command !== '') return command;
+      }
+      node = node.return;
+    }
+    return null;
+  } catch {
+    // 内核结构变了/JSON 解析失败：退回可见文本判定，不影响上色。
+    return null;
+  }
 }
 
 /**
@@ -149,8 +220,16 @@ function scopeFor(attrs, options = {}) {
  * @param element 元素。
  * @returns 用于判定的文本。
  */
-function dangerText(element) {
+function dangerText(element, attrs) {
   try {
+    // 只有 bash 行才去读 fiber：这是内核的私有结构，别的行（read/write…）的
+    // fiber 里也可能挂着 block，误读会把它劫持成命令行、类别全乱。
+    // 真机 bash 行的根元素是 `data-sample="bash"` + `data-variant="bash"`。
+    const isBash = attrs?.['data-sample'] === 'bash' || attrs?.['data-variant'] === 'bash';
+    if (isBash) {
+      const command = commandTextFromFiber(element);
+      if (command !== null) return command.slice(0, 300);
+    }
     const header = typeof element.querySelector === 'function'
       ? element.querySelector('[data-disclosure-row]')
       : null;
@@ -274,15 +353,18 @@ export function tagElement(element) {
     || attrs['data-slot'] === 'conversation.input.permission';
   if (!dynamic && element.getAttribute(MARK_ATTR) !== null) return element.getAttribute(CAT_ATTR);
 
-  const text = dangerText(element);
-  const category = classifyAttrs(attrs, { text });
+  const text = dangerText(element, attrs);
+  const category = classifyAttrs(attrs, { text, element });
   if (category === null) return null;
 
   try {
     // 过程组标题：把「标签」切出来，才能只染标签、不染详情（见 splitTitleLabel）。
     if (attrs['data-process-activity'] !== undefined) splitTitleLabel(element);
     element.setAttribute(CAT_ATTR, category);
-    element.setAttribute(SCOPE_ATTR, scopeFor(attrs, { hasDetail: hasTitleDetail(text) }));
+    element.setAttribute(SCOPE_ATTR, scopeFor(attrs, {
+      hasDetail: hasTitleDetail(text),
+      category,
+    }));
     element.setAttribute(MARK_ATTR, '');
     return category;
   } catch {

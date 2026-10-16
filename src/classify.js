@@ -169,6 +169,43 @@ export function isCompactionRow(attrs) {
 }
 
 /**
+ * 上下文压缩的通用命令行（`GenericCommandCard`）识别。
+ *
+ * ## 为什么压缩有**两个**不同的渲染路径
+ *
+ * `/compact` 这一行在内核里分两段渲染，用的是**不同组件**：
+ *
+ * | 阶段 | 组件 | 根元素 |
+ * |---|---|---|
+ * | 压缩**进行中**（`compaction === null`） | `GenericCommandCard` | `data-variant="others"` + 标题 `compact` |
+ * | 压缩**已完成** | `CompactionItem` | `class="…_compactionRow"` |
+ *
+ * 第一版只覆盖了后者（靠 `_compactionRow` 类名），于是用户看到
+ * "压缩的上色只在压缩完成后才上色 压缩中没有上色"。
+ *
+ * 进行中这一行走的是通用命令卡片，`data-variant="others"` 是**所有**斜杠命令
+ * 共用的（不能据此判定），所以改用**标题文字**识别：内核把
+ * `message.compaction.commandTitle` 硬编码为字面量 `"compact"`（实测），
+ * 而 `.title` 元素是独立的一个 span，文本恰好就是这个标题。
+ *
+ * @param element 候选元素。
+ * @param attrs 属性快照。
+ * @returns 是否为进行中的压缩命令行。
+ */
+export function isRunningCompaction(element, attrs) {
+  // 只认"通用命令卡片"这一形状，避免误伤别的行。
+  if (attrs?.['data-variant'] !== 'others') return false;
+  try {
+    if (typeof element.querySelector !== 'function') return false;
+    const title = element.querySelector('[class*="_title"]');
+    if (title === null) return false;
+    return title.textContent === 'compact';
+  } catch {
+    return false;
+  }
+}
+
+/**
  * 判断一段文本命中的权限等级。
  *
  * 用户明确要求「不同权限等级的颜色应该不同」。`PermissionSelect` 的触发按钮
@@ -200,9 +237,13 @@ export function permissionLevel(text) {
 export function classifyAttrs(attrs, options = {}) {
   const a = attrs ?? {};
 
-  // 0. 重试行 / 压缩行：它们没有任何语义化 data-* 属性，只能靠类名后缀识别。
+  // 0. 重试行 / 压缩行：它们没有可用的语义化 data-* 属性，只能靠类名后缀
+  //    或标题字面量识别。
   if (isRetryRow(a)) return 'retry';
   if (isCompactionRow(a)) return 'compaction';
+  //    ⚠️ 压缩**进行中**走的是另一个组件（GenericCommandCard），类名里没有
+  //    `compaction`，必须靠标题文字 `compact` 认（见 isRunningCompaction）。
+  if (isRunningCompaction(options.element, a)) return 'compaction';
 
   // 1. 插槽锚点优先：控件类与内容类不重叠，先判更具体的。
   const slot = a['data-slot'];
