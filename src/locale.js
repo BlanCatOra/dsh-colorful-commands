@@ -16,9 +16,6 @@ const zh = {
   masterLabel: '启用着色',
   masterHint: '关闭后立即恢复 DSH 原生配色，设置会保留。',
 
-  colorTextLabel: '正文也染色',
-  colorTextHint: '默认只给图标与短标签上色，正文保持原生（更好读）。开启后连摘要一起染。',
-
   presetLabel: '配色预设',
   presetHint: '预设提供一套完整配色；下面仍可逐个类别覆盖。',
 
@@ -49,20 +46,25 @@ const zh = {
   readOnlyNotice: '当前部署不允许写入设置。',
 
   categoryThinking: '思考 / 推理',
-  categoryCommand: '执行命令',
-  categoryDanger: '危险命令',
+  categoryCommandLow: '命令 · 低风险',
+  categoryCommandMid: '命令 · 中风险',
+  categoryCommandHigh: '命令 · 高风险',
   categoryRead: '读取文件',
   categoryWrite: '写入 / 编辑',
   categorySearch: '搜索',
   categoryWeb: '网络请求',
   categoryOther: '其他工具',
 
+  permissionsTitle: '权限等级',
+  permissionsHint: '权限选择控件会按当前等级自动取这里的颜色 —— 四个等级各不相同。',
   controlsTitle: '界面控件',
-  controlsHint: '这些是输入框附近的控件（权限选择、模型选择等），可单独着色。',
-  categoryCtlPermission: '权限选择',
-  categoryCtlModel: '模型选择',
+  controlsHint: '输入框附近的控件。权限选择按当前等级自动变色，不用单独配。',
+  categoryCtlPermission: '权限选择（未识别等级）',
   categoryCtlPlan: '计划模式',
-  categoryCtlActivity: '活动栏',
+  categoryPermReadonly: '权限 · 仅可查看',
+  categoryPermWorkspace: '权限 · 工作区内修改',
+  categoryPermFull: '权限 · 完全权限',
+  categoryPermAuto: '权限 · Auto review',
 
   presetNone: '不预设（仅自定义）',
   presetChinese: '中国传统色',
@@ -78,9 +80,6 @@ const en = {
 
   masterLabel: 'Enable coloring',
   masterHint: 'Turning this off restores the native DSH palette immediately; your settings are kept.',
-
-  colorTextLabel: 'Tint body text too',
-  colorTextHint: 'By default only icons and short labels are tinted so text stays readable. Turn on to tint summaries as well.',
 
   presetLabel: 'Preset',
   presetHint: 'A preset provides a full palette; you can still override individual categories below.',
@@ -112,20 +111,25 @@ const en = {
   readOnlyNotice: 'This deployment does not allow writing settings.',
 
   categoryThinking: 'Thinking / reasoning',
-  categoryCommand: 'Commands',
-  categoryDanger: 'Dangerous commands',
+  categoryCommandLow: 'Command · low risk',
+  categoryCommandMid: 'Command · medium risk',
+  categoryCommandHigh: 'Command · high risk',
   categoryRead: 'File reads',
   categoryWrite: 'Writes / edits',
   categorySearch: 'Search',
   categoryWeb: 'Web requests',
   categoryOther: 'Other tools',
 
+  permissionsTitle: 'Permission levels',
+  permissionsHint: 'The permission select recolors itself per level using these four colors.',
   controlsTitle: 'Interface controls',
-  controlsHint: 'Controls near the composer (permission, model selection) can be colored separately.',
-  categoryCtlPermission: 'Permission select',
-  categoryCtlModel: 'Model select',
+  controlsHint: 'Controls near the composer. The permission select recolors itself per level; no separate setting needed.',
+  categoryCtlPermission: 'Permission select (unknown level)',
   categoryCtlPlan: 'Plan mode',
-  categoryCtlActivity: 'Activity bar',
+  categoryPermReadonly: 'Permission · Read only',
+  categoryPermWorkspace: 'Permission · Workspace write',
+  categoryPermFull: 'Permission · Full access',
+  categoryPermAuto: 'Permission · Auto review',
 
   presetNone: 'None (custom only)',
   presetChinese: 'Chinese traditional',
@@ -137,17 +141,20 @@ const en = {
 /** 每个类别 id → 文案键。 */
 export const CATEGORY_KEYS = {
   thinking: 'categoryThinking',
-  command: 'categoryCommand',
-  danger: 'categoryDanger',
+  commandLow: 'categoryCommandLow',
+  commandMid: 'categoryCommandMid',
+  commandHigh: 'categoryCommandHigh',
   read: 'categoryRead',
   write: 'categoryWrite',
   search: 'categorySearch',
   web: 'categoryWeb',
   other: 'categoryOther',
   'ctl-permission': 'categoryCtlPermission',
-  'ctl-model': 'categoryCtlModel',
   'ctl-plan': 'categoryCtlPlan',
-  'ctl-activity': 'categoryCtlActivity',
+  'perm-readonly': 'categoryPermReadonly',
+  'perm-workspace': 'categoryPermWorkspace',
+  'perm-full': 'categoryPermFull',
+  'perm-auto': 'categoryPermAuto',
 };
 
 /** 预设 id → 文案键。 */

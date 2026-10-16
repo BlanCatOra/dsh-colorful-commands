@@ -19,7 +19,7 @@
  *
  * @module dsh-colorful-commands/classify
  */
-import { DANGER_PATTERNS } from './constants.js';
+import { PERMISSION_LEVELS, TITLE_SEPARATOR, commandRisk } from './constants.js';
 
 /**
  * 工具名 → 类别。
@@ -33,6 +33,9 @@ import { DANGER_PATTERNS } from './constants.js';
  * - 本地搜索（`grep` / `glob`）留在 `search`，与网络请求分开。
  *
  * 未列出的工具名**不是错误**，会落到 `other`；这张表只需覆盖常见项。
+ *
+ * ⚠️ 命令类不在这里落具体等级：`bash` / `pwsh` 先归 `command`，
+ * 再由 `commandRisk()` 细分成 `commandLow` / `commandMid` / `commandHigh`。
  */
 const TOOL_CATEGORY = {
   bash: 'command',
@@ -68,10 +71,8 @@ const VARIANT_CATEGORY = {
  * DSH `data-kind`（轨迹行）→ 类别。
  *
  * 轨迹视图（trajectory）与消息流（chat）用不同的钩子，所以两套都要覆盖。
- *
- * ⚠️ `user` / `message` 不再映射 —— 它们是**消息本体**，不是过程行；给消息
- * 本体上色没有意义（而且消息行的 DOM 层级与过程行不同，见 constants.js 的说明）。
- * 未映射的 kind 会落到 `null`（不着色），这是刻意的。
+ * 未映射的 kind 会落到 `null`（不着色），这是刻意的 —— 轨迹行里 `user` /
+ * `assistant` / `message` 是**消息本体**，给它们上色只会让整屏变花。
  */
 const KIND_CATEGORY = {
   tool: 'command',
@@ -85,9 +86,9 @@ const KIND_CATEGORY = {
  * 那些是**过程组标题**（`ChatGroupSeat` 的 `ProcessGroupHeader`），它们的 DOM
  * 钩子是 `data-process-activity`，**不带 `data-tool`**，所以第一版完全没标记它们。
  *
- * 取值来自内核 `ui-chat` 的 `PROCESS_ICONS` 与 `message.stepProcess.*` 文案键
- * （实测枚举）：thinking / read / readImage / search / edit / write / commands /
- * code / plan / questions / subagents / tools / webFetch / webSearch。
+ * 取值来自内核 `ui-chat` 的 `message.stepProcess.*` 文案键（实测枚举）：
+ * thinking / read / readImage / search / edit / write / code / commands /
+ * plan / questions / subagents / tools / webFetch / webSearch。
  * 未列出的取值落 `other`，因此宿主以后新增活动类型也会被着色，不会漏。
  *
  * `tools` / `commands` 是**聚合**类（"已调用工具"/"执行了命令"），归 command
@@ -112,37 +113,46 @@ const ACTIVITY_CATEGORY = {
 
 /**
  * DSH 插槽名 → 控件类别。`ui-renderer` 的 `renderSlot` 会给每个插槽条目
- * 套一层 `[data-slot="<槽名>"]`，这是**官方稳定契约**（不是内部实现细节），
- * 所以"其他控件也一样可染色"就靠它。
+ * 套一层 `[data-slot="<槽名>"]`，这是**官方稳定契约**（不是实现细节）。
  *
- * ⚠️ **只列有明确语义的控件槽。** `left` / `right` / `dock` / `overlay` /
- * `attachments` 装的是加号按钮、斜杠命令触发器等**原生控件**：给它们上色会
- * 波及弹出的菜单（实测斜杠命令菜单项被涂灰，非常难看），而且这些按钮本来
- * 就有清晰的语义配色。刻意不碰。
+ * ⚠️ **只保留用户明确要的两个槽。**
+ *
+ * - `conversation.input.permission` —— 权限选择（还要按等级细分，见下）。
+ * - `conversation.input.plan` —— 计划模式。
+ *
+ * ⚠️ **`ctl-model` 与 `ctl-activity` 已删除**（用户 2026-10-16：「语音输入和
+ * 模型名称不需要颜色」）：
+ * - `conversation.input.model` 是**模型名称**（截图里 `deepseek-v4.1-flash Xhigh`
+ *   被涂蓝）；
+ * - `conversation.input.activity` 是**语音输入控件**（实测
+ *   `dsh-experimental-client-ui-voice-input` 注册的正是这个槽）。
+ *
+ * ⚠️ **`left` / `right` / `dock` / `overlay` / `attachments` 也不碰**：它们装的是
+ * 加号按钮、斜杠命令触发器等**原生控件**，上色会波及弹出的菜单
+ * （实测斜杠命令菜单项被涂灰，非常难看）。
  */
 const SLOT_CATEGORY = {
   'conversation.input.permission': 'ctl-permission',
-  'conversation.input.model': 'ctl-model',
   'conversation.input.plan': 'ctl-plan',
-  'conversation.input.activity': 'ctl-activity',
 };
 
 /**
- * 判断一段命令文本是否命中危险词表。
+ * 判断一段文本命中的权限等级。
  *
- * 只做包含匹配。**判错没有后果**：本插件不执行、不拦截、不改变任何命令的
- * 行为，只影响颜色。因此这里刻意保持简单可读，不引入解析器。
+ * 用户明确要求「不同权限等级的颜色应该不同」。`PermissionSelect` 的触发按钮
+ * 文本就是当前预设的 label（内核 `dsh-client-ui-permission-presets` 实测：
+ * 「仅可查看」/「工作区内修改」/「完全权限」/「Auto review」），所以按文本判定
+ * 即可，不需要读 React 内部状态。
  *
- * @param text 命令文本（可能为空/undefined）。
- * @returns 命中返回 true。
+ * @param text 控件可见文本。
+ * @returns 权限等级类别，或 null（未命中任何已知等级）。
  */
-export function isDangerousCommand(text) {
-  if (typeof text !== 'string' || text === '') return false;
-  const upper = text.toUpperCase();
-  for (const pattern of DANGER_PATTERNS) {
-    if (upper.includes(pattern.toUpperCase())) return true;
+export function permissionLevel(text) {
+  if (typeof text !== 'string' || text === '') return null;
+  for (const [label, category] of Object.entries(PERMISSION_LEVELS)) {
+    if (text.includes(label)) return category;
   }
-  return false;
+  return null;
 }
 
 /**
@@ -152,55 +162,106 @@ export function isDangerousCommand(text) {
  * 查找顺序即优先级：越具体的钩子越先看。
  *
  * @param attrs 属性快照，键为属性名（`data-tool` 这类），值为字符串或 undefined。
- * @param options.text 元素的可见文本，仅用于危险命令判定；不传则跳过该判定。
+ * @param options.text 元素的可见文本，用于命令风险与权限等级判定；不传则跳过。
  * @returns 类别 id，或 null（不属于任何可染色类别）。
  */
 export function classifyAttrs(attrs, options = {}) {
   const a = attrs ?? {};
 
-  // 0. 跳过已染色行的**内部**子部件。
-  //    实测：bash 工具行内部还有一个 `data-sample="bash"` 的卡片根，它也带
-  //    `data-variant="bash"`。若一并染色，同一条命令会出现两条竖条、两层着色。
-  //    外层（带 `data-tool`）已经覆盖了它，这里直接退出。
-  if (a['data-sample'] !== undefined) return null;
-
-  // 1. 插槽锚点优先：控件类与消息类不重叠，先判更具体的。
+  // 1. 插槽锚点优先：控件类与内容类不重叠，先判更具体的。
   const slot = a['data-slot'];
-  if (typeof slot === 'string' && Object.hasOwn(SLOT_CATEGORY, slot)) return SLOT_CATEGORY[slot];
-
-  // 1.5 过程组标题（"执行了命令"/"已完成分析"）—— 它们**不带 data-tool**，
-  //     只有 data-process-activity，所以必须单独判，否则整类漏掉不着色。
-  const activity = a['data-process-activity'];
-  if (typeof activity === 'string' && activity !== '') {
-    return ACTIVITY_CATEGORY[activity] ?? 'other';
-  }
-
-  // 2. 工具行：data-tool 精确到具体工具名。
-  const tool = a['data-tool'];
-  if (typeof tool === 'string' && tool !== '') {
-    const base = TOOL_CATEGORY[tool] ?? 'other';
-    // 命令类再细分危险等级：这是用户明确要的"命令风险等级"。
-    if (base === 'command' && isDangerousCommand(options.text)) return 'danger';
+  if (typeof slot === 'string' && Object.hasOwn(SLOT_CATEGORY, slot)) {
+    const base = SLOT_CATEGORY[slot];
+    // 权限选择按**当前等级**细分 —— 用户明确要求不同等级不同色。
+    if (base === 'ctl-permission') return permissionLevel(options.text) ?? base;
     return base;
   }
 
-  // 3. 变体：推理行只有 data-variant="think"，工具行也有但已被上一条拦下。
+  // 2. 过程组标题（"执行了命令"/"已完成分析"）—— 它们**不带 data-tool**，
+  //    只有 data-process-activity，所以必须单独判，否则整类漏掉不着色。
+  const activity = a['data-process-activity'];
+  if (typeof activity === 'string' && activity !== '') {
+    const abase = ACTIVITY_CATEGORY[activity] ?? 'other';
+    // ⚠️ `commands` / `tools` 是**聚合**活动（"执行了命令"），先归 `command`，
+    // 再按标题文本细分风险 —— 不细分会让整类拿不到颜色（调色板里没有 `command`）。
+    if (abase === 'command') return commandCategory(options.text);
+    return abase;
+  }
+
+  // 3. 工具行 / 命令行。
+  //
+  //    ⚠️ **`data-sample` 不再早退 —— 这是"运行命令"一直不上色的根因。**
+  //
+  //    内核实测（`dsh-client-ui-tool` 的 `BashRow`）：bash 工具行**不走**
+  //    `ToolRow`，而是注册到 `tool.call.toolview` 的 `key: "bash"`，其根元素是
+  //
+  //        <div data-sample="bash" data-variant="bash" data-state="…">
+  //
+  //    **它没有 `data-tool`。** 旧版这里第一条规则是
+  //    `if (a['data-sample'] !== undefined) return null;`（当时为了跳过 ToolRow
+  //    内部重复的 bash 卡片），于是整类被静默跳过 —— 截图里「运行命令」永远是
+  //    灰的，而 read/edit/write（走 ToolRow，带 `data-tool`）是彩色的。
+  //
+  //    修法：把 `data-sample` 当作与 `data-variant` 等价的钩子，并按**具体工具名
+  //    优先、其次变体**取值。命令类再由 `commandCategory()` 按风险细分。
+  const tool = a['data-tool'];
   const variant = a['data-variant'];
-  if (typeof variant === 'string' && Object.hasOwn(VARIANT_CATEGORY, variant)) {
-    const base = VARIANT_CATEGORY[variant];
-    if (base === 'command' && isDangerousCommand(options.text)) return 'danger';
+  const base = typeof tool === 'string' && tool !== ''
+    ? TOOL_CATEGORY[tool] ?? 'other'
+    : typeof variant === 'string' && Object.hasOwn(VARIANT_CATEGORY, variant)
+      ? VARIANT_CATEGORY[variant]
+      : null;
+
+  if (base !== null) {
+    if (base === 'command') return commandCategory(options.text);
     return base;
   }
 
   // 4. 轨迹行。
   const kind = a['data-kind'];
-  if (typeof kind === 'string' && Object.hasOwn(KIND_CATEGORY, kind)) return KIND_CATEGORY[kind];
+  if (typeof kind === 'string' && Object.hasOwn(KIND_CATEGORY, kind)) {
+    const kbase = KIND_CATEGORY[kind];
+    if (kbase === 'command') return commandCategory(options.text);
+    return kbase;
+  }
 
   // ⚠️ 刻意不处理 `data-chat-flow-kind`：它是**整列宽**的 flowItem 包裹层，
-  // 而消息气泡在内部靠右 —— 给它上色会把竖条画到窗口最左缘，与内容脱节
-  // （实测截图里那条红竖线就是这个）。见 constants.js 的说明。
+  // 而消息气泡在内部靠右 —— 给它上色会把颜色画到窗口最左缘、与内容脱节。
 
   return null;
+}
+
+/**
+ * 命令风险等级 → 类别 id。
+ *
+ * @param text 判定用文本。
+ * @returns 三个 `command*` 类别之一。
+ */
+export function commandCategory(text) {
+  const risk = commandRisk(text);
+  if (risk === 'high') return 'commandHigh';
+  if (risk === 'mid') return 'commandMid';
+  return 'commandLow';
+}
+
+/**
+ * 判断一行表头文本里是否**既有标签又有细节**。
+ *
+ * 内核 `ProcessGroupHeader` 的标题是
+ * `detail === "" ? label : label + t("message.turnProcess.separator") + detail`
+ * （实测 separator = `" · "`）。`detail` 是**模型的实时分析正文**
+ * （`summary.runningDetail`，推理阶段就是分析文本本身）。
+ *
+ * 用户反馈「发送 prompt 后的模型分析，除了 tag，分析正文也被错误地上色，导致
+ * 上色部分太多」—— 根因就是标签与正文在**同一个文本节点**里，CSS 无法只染标签。
+ * 所以这里做一次判定：带细节时**只染图标**，不带细节（历史/已折叠的组标题就是
+ * 纯标签）时标签与图标一起染。
+ *
+ * @param text 元素可见文本。
+ * @returns 是否带详情。
+ */
+export function hasTitleDetail(text) {
+  return typeof text === 'string' && text.includes(TITLE_SEPARATOR);
 }
 
 /**
@@ -218,6 +279,7 @@ export function readAttrs(element) {
     'data-process-activity',
     'data-tool',
     'data-variant',
+    'data-sample',
     'data-kind',
   ];
   const attrs = {};

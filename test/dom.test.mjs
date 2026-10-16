@@ -10,7 +10,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { tagElement, tagTree, clearTags } from '../src/dom.js';
+import { tagElement, tagTree, clearTags, startObserver } from '../src/dom.js';
 import { CAT_ATTR, MARK_ATTR, SCOPE_ATTR } from '../src/css.js';
 
 /**
@@ -83,9 +83,10 @@ function collect(root, selector) {
 }
 
 test('工具行按 data-tool 打标，作用域是 header', () => {
+  // 无文本时命令按最低风险档上色（不猜危险）。
   const row = makeElement({ 'data-tool': 'bash' });
-  assert.equal(tagElement(row), 'command');
-  assert.equal(row.getAttribute(CAT_ATTR), 'command');
+  assert.equal(tagElement(row), 'commandLow');
+  assert.equal(row.getAttribute(CAT_ATTR), 'commandLow');
   assert.equal(row.getAttribute(SCOPE_ATTR), 'header');
   assert.equal(row.getAttribute(MARK_ATTR), '');
 });
@@ -103,9 +104,65 @@ test('消息流包裹层不打标（整列宽，加竖条会脱节）', () => {
 });
 
 test('轨迹行用 self 作用域', () => {
-  const row = makeElement({ 'data-kind': 'tool' });
-  assert.equal(tagElement(row), 'command');
+  const row = makeElement({ 'data-kind': 'tool' }, { text: 'ls' });
+  assert.equal(tagElement(row), 'commandLow');
   assert.equal(row.getAttribute(SCOPE_ATTR), 'self');
+});
+
+test('bash 工具行（data-sample，无 data-tool）被打标且用 self 作用域 —— "运行命令"回归守卫', () => {
+  // ⚠️ 内核实测：bash 工具行走 BashRow，根元素只有 data-sample + data-variant，
+  // **没有 data-tool**，也**不是 DisclosureRow**（没有 data-disclosure-header）。
+  // 旧实现用 `header` 作用域或干脆跳过，两种情况都表现为"运行命令没有颜色"。
+  const row = makeElement({ 'data-sample': 'bash', 'data-variant': 'bash' }, { text: '运行命令 · 校验语法' });
+  assert.equal(tagElement(row), 'commandLow', 'bash 行必须被着色');
+  assert.equal(row.getAttribute(SCOPE_ATTR), 'self', '没有折叠表头，不能用 header 作用域');
+});
+
+test('过程组标题是"动态"元素：文本变化后必须重新判定作用域（回归守卫）', () => {
+  // ⚠️ 这是"分析正文被错误地上色"的**真正根因**：过程组标题打标时正文还没流式
+  // 到达，作用域被定成 title（染文字）；等到内核把「标签 · 分析正文」拼进来时，
+  // 元素已带 MARK_ATTR，旧实现直接跳过 —— 于是正文被染色且永不纠正。
+  const el = makeElement({ 'data-process-activity': 'thinking' }, { text: '正在分析请求' });
+  tagElement(el);
+  assert.equal(el.getAttribute(SCOPE_ATTR), 'title', '初始只有标签：染文字');
+  // 正文到达（内核改 textNode.nodeValue，不产生 childList 记录）。
+  el.text = '正在分析请求 · 我先看看这个 DOM 结构再决定';
+  tagElement(el);
+  assert.equal(el.getAttribute(SCOPE_ATTR), 'icon', '正文到达后必须改成只染图标');
+  // 组关闭后正文消失，应能回到 title。
+  el.text = '正在分析请求';
+  tagElement(el);
+  assert.equal(el.getAttribute(SCOPE_ATTR), 'title', '正文消失后应回到染文字');
+});
+
+test('普通元素仍然只处理一次（动态重判不得变成全量重扫）', () => {
+  const el = makeElement({ 'data-tool': 'bash' }, { text: 'ls' });
+  tagElement(el);
+  assert.equal(el.getAttribute(MARK_ATTR), '', '普通元素仍需打 MARK 以跳过重复扫描');
+  // 文本改成危险命令也不应重判（它不是动态元素）。
+  el.text = 'rm -rf /';
+  assert.equal(tagElement(el), 'commandLow', '普通元素保持幂等，不重判');
+});
+
+test('聚合过程组标题（执行了命令）必须拿到颜色', () => {
+  // ⚠️ 调色板里没有裸 `command` 类别；若把 commands/tools 直接映射成 `command`，
+  // 整类会静默不着色（实测真机 69 个元素无一有颜色）。
+  const el = makeElement({ 'data-process-activity': 'commands' }, { text: '执行了命令' });
+  assert.equal(tagElement(el), 'commandLow');
+  const running = makeElement({ 'data-process-activity': 'commands' }, { text: '正在运行命令 · sudo systemctl restart nginx' });
+  assert.equal(tagElement(running), 'commandMid', '聚合标题里的危险命令也要按风险分级');
+});
+
+test('过程组标题带分析正文时降级为只染图标', () => {
+  // 内核把「标签 + ' · ' + 分析正文」放在同一个文本节点里。
+  const withDetail = makeElement({ 'data-process-activity': 'reading' }, { text: '正在分析请求 · 我看看这个 DOM 结构' });
+  assert.equal(withDetail.getAttribute(SCOPE_ATTR), null, '尚未打标');
+  tagElement(withDetail);
+  assert.equal(withDetail.getAttribute(SCOPE_ATTR), 'icon', '带正文时只染图标，避免正文被上色');
+
+  const pureLabel = makeElement({ 'data-process-activity': 'commands' }, { text: '执行了命令' });
+  tagElement(pureLabel);
+  assert.equal(pureLabel.getAttribute(SCOPE_ATTR), 'title', '纯标签时标签与图标一起染');
 });
 
 test('插槽锚点用 tint 作用域（控件不加竖条）', () => {
@@ -128,17 +185,6 @@ test('无关元素不打标', () => {
   assert.equal(el.getAttribute(CAT_ATTR), null);
 });
 
-test('内层 data-sample 卡片不被重复打标（避免双竖条）', () => {
-  // 真实结构：外层工具行带 data-tool，内层 bash 卡片带 data-sample + data-variant。
-  const inner = makeElement({ 'data-sample': 'bash', 'data-variant': 'bash' });
-  const outer = makeElement({ 'data-tool': 'bash' }, { children: [inner] });
-
-  const count = tagTree(outer);
-  assert.equal(count, 1, '只应打标外层一个元素');
-  assert.equal(outer.getAttribute(CAT_ATTR), 'command');
-  assert.equal(inner.getAttribute(CAT_ATTR), null, '内层卡片不得打标');
-});
-
 test('危险命令判定只读表头文本，不读展开后的正文', () => {
   // 表头写的是普通命令；展开正文里含 sudo 字样（例如输出里打印了 sudo）。
   const headerRow = makeElement({ 'data-disclosure-row': '' }, { text: 'ls -la' });
@@ -146,16 +192,24 @@ test('危险命令判定只读表头文本，不读展开后的正文', () => {
   const body = makeElement({}, { text: '输出：请用 sudo 安装依赖' });
   const root = makeElement({ 'data-tool': 'bash' }, { children: [header, body] });
 
-  assert.equal(tagElement(root), 'command', '正文里的 sudo 不得让它变成 danger');
-  assert.equal(root.getAttribute(CAT_ATTR), 'command');
+  assert.equal(tagElement(root), 'commandLow', '正文里的 sudo 不得让它升级成中/高风险');
+  assert.equal(root.getAttribute(CAT_ATTR), 'commandLow');
 });
 
-test('表头本身是危险命令时正确归入 danger', () => {
+test('表头本身是危险命令时正确归入高风险', () => {
   const headerRow = makeElement({ 'data-disclosure-row': '' }, { text: 'rm -rf /tmp/x' });
   const header = makeElement({ 'data-disclosure-header': '' }, { children: [headerRow] });
   const root = makeElement({ 'data-tool': 'bash' }, { children: [header] });
 
-  assert.equal(tagElement(root), 'danger');
+  assert.equal(tagElement(root), 'commandHigh');
+});
+
+test('中风险命令按中间档上色', () => {
+  const headerRow = makeElement({ 'data-disclosure-row': '' }, { text: 'sudo systemctl restart nginx' });
+  const header = makeElement({ 'data-disclosure-header': '' }, { children: [headerRow] });
+  const root = makeElement({ 'data-tool': 'bash' }, { children: [header] });
+
+  assert.equal(tagElement(root), 'commandMid');
 });
 
 test('tagTree 会处理根自身与所有后代', () => {
@@ -199,4 +253,77 @@ test('没有 getAttribute 的输入安全返回 null', () => {
   assert.equal(tagElement(null), null);
   assert.equal(tagElement(undefined), null);
   assert.equal(tagElement({}), null);
+});
+
+
+// ── 观察器：characterData 路径 ────────────────────────────────────────
+//
+// ⚠️ 这一层必须用**真的假 MutationObserver** 测，不能只测 tagElement：
+// "正文被上色"的根因是**观察器没在文本变化时重判**，而 tagElement 单测
+// 证明不了观察器有没有收到那次变化。
+
+/** 最小 fake MutationObserver：记录配置，并允许手动派发记录。 */
+function makeFakeObserver() {
+  const instances = [];
+  class FakeObserver {
+    constructor(callback) {
+      this.callback = callback;
+      this.config = null;
+      this.disconnected = false;
+      instances.push(this);
+    }
+    observe(_target, config) { this.config = config; }
+    disconnect() { this.disconnected = true; }
+  }
+  return { FakeObserver, instances };
+}
+
+test('观察器必须订阅 characterData（否则正文流式到达时不会重判）', () => {
+  const { FakeObserver, instances } = makeFakeObserver();
+  const prevMO = globalThis.MutationObserver;
+  const prevRAF = globalThis.requestAnimationFrame;
+  globalThis.MutationObserver = FakeObserver;
+  globalThis.requestAnimationFrame = (fn) => fn();
+  try {
+    // 真实结构：<button data-process-activity><span class="_label">文本</span></button>
+    // 文本节点挂在 label 上，data-process-activity 在外层 button 上。
+    const label = makeElement({}, { text: '正在分析请求' });
+    const title = makeElement({ 'data-process-activity': 'thinking' }, { children: [label] });
+    label.parentNode = title;
+    const doc = {
+      body: makeElement({}, { children: [title] }),
+      querySelectorAll: () => [],
+      documentElement: null,
+    };
+
+    const stop = startObserver({ document: doc });
+    assert.equal(instances.length, 1, '必须建立一个观察器');
+    assert.equal(instances[0].config.childList, true);
+    assert.equal(instances[0].config.subtree, true);
+    assert.equal(
+      instances[0].config.characterData,
+      true,
+      '不订阅 characterData 就永远看不到「标签 · 正文」的文本变化',
+    );
+
+    // 初始只有标签 → title 作用域（染文字）。
+    assert.equal(title.getAttribute(SCOPE_ATTR), 'title');
+
+    // 模拟内核把正文拼进文本节点：派发一条 characterData 记录，
+    // target 是**文本节点**（与真实 DOM 一致），其父元素是 label。
+    label.text = '正在分析请求 · 我先看看这个 DOM 结构再决定';
+    const textNode = { nodeType: 3, parentNode: label };
+    instances[0].callback([{ type: 'characterData', target: textNode }]);
+
+    assert.equal(
+      title.getAttribute(SCOPE_ATTR),
+      'icon',
+      'characterData 记录必须上溯到 title 并重判为"只染图标"',
+    );
+    stop();
+  } finally {
+    globalThis.MutationObserver = prevMO;
+    if (prevRAF === undefined) delete globalThis.requestAnimationFrame;
+    else globalThis.requestAnimationFrame = prevRAF;
+  }
 });

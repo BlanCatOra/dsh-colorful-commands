@@ -41,7 +41,6 @@ export function readConfig(snapshot) {
   return {
     enabled: value.enabled !== false,
     preset: typeof value.preset === 'string' ? value.preset : 'chinese',
-    colorText: value.colorText === true,
     colors: colors !== null && typeof colors === 'object' ? { ...colors } : {},
   };
 }
@@ -59,7 +58,7 @@ function sameConfig(a, b) {
  */
 export function draftCss(draft) {
   const { colors, enabled } = resolveColors(draft, { presetColors: presetColors(draft?.preset) });
-  return buildStylesheet(colors, { enabled, colorText: draft?.colorText === true });
+  return buildStylesheet(colors, { enabled });
 }
 
 /**
@@ -229,7 +228,6 @@ export function createSettingsFace(options = {}) {
         const results = await Promise.all([
           scope.set('enabled', draft.enabled),
           scope.set('preset', draft.preset),
-          scope.set('colorText', draft.colorText === true),
           scope.set('colors', draft.colors),
         ]);
         store.update((state) => {

@@ -452,6 +452,68 @@ test('summary 视图返回描述文案（插件列表页用）', async () => {
   assert.equal(out, 't:cardDescription');
 });
 
+/** 递归收集渲染树里所有字符串子节点（文案键）。 */
+function collectText(node, out = []) {
+  if (node === null || node === undefined) return out;
+  if (typeof node === 'string') { out.push(node); return out; }
+  if (Array.isArray(node)) { for (const n of node) collectText(n, out); return out; }
+  if (typeof node !== 'object') return out;
+  // 函数型节点（CategoryRow 这类组件）要**真的调用一次**才能看到它渲染出的文案，
+  // 否则断言只会看到 `type` 是函数、里面一个字符串都没有（假绿）。
+  if (typeof node.type === 'function') {
+    collectText(node.type(node.props ?? {}), out);
+    return out;
+  }
+  collectText(node.props?.children, out);
+  return out;
+}
+
+test('设置卡片必须渲染权限等级四档，且不再有模型选择 / 活动栏 / 正文染色开关', async () => {
+  installDocument();
+  const client = await loadClient(BASE());
+  const scope = makeScope();
+  const { ctx, registrations } = makeCtx({ forms: makeForms(scope) });
+  client.apply(ctx);
+
+  const card = registrations.find((r) => r.name === 'plugins.bundle.config');
+  assert.ok(card, '必须注册到 plugins.bundle.config');
+
+  const snapshot = {
+    config: { enabled: true, preset: 'chinese', colors: {} },
+    baseline: { enabled: true, preset: 'chinese', colors: {} },
+    saving: false,
+    failed: false,
+    available: true,
+    writable: true,
+  };
+  const face = registrations.find((r) => r.name === 'plugins.bundle.config');
+  const out = card.__component({
+    view: 'page',
+    t: (key) => key,
+    useDraft: (selector) => selector(snapshot),
+    formState: () => ({ available: true, writable: true, dirty: false, invalid: false, saving: false, failed: false }),
+    buildCss: face !== undefined ? () => '' : () => '',
+    setDraft: () => undefined,
+    onSave: () => undefined,
+    onDiscard: () => undefined,
+  });
+  const texts = collectText(out);
+
+  // 用户要求"不同权限等级的颜色应该不同" —— 四档必须都能在设置里单独配色。
+  for (const key of [
+    'categoryCommandLow', 'categoryCommandMid', 'categoryCommandHigh',
+    'categoryPermReadonly', 'categoryPermWorkspace', 'categoryPermFull', 'categoryPermAuto',
+    'permissionsTitle',
+    'categoryCtlPermission', 'categoryCtlPlan',
+  ]) {
+    assert.ok(texts.includes(key), `设置卡片必须渲染 ${key}`);
+  }
+  // 用户明确要求"语音输入和模型名称不需要颜色"。
+  for (const gone of ['categoryCtlModel', 'categoryCtlActivity', 'colorTextLabel']) {
+    assert.ok(!texts.includes(gone), `不得再渲染 ${gone}`);
+  }
+});
+
 test('renderer 没有 slots.inject 时回退到直接 register（旧版兼容）', async () => {
   installDocument();
   const client = await loadClient(BASE());

@@ -92,57 +92,56 @@ export function sanitizeColor(value) {
  * ## 为什么默认只染图标
  *
  * 第一版把整行文字都染了，实测**非常难看**：一段思考摘要整段变紫、层级全丢，
- * 满屏饱和色反而看不出重点。所以默认策略改为：
+ * 满屏饱和色反而看不出重点。所以策略是「能只染图标就只染图标」：
  *
  * - **图标**：给类别色（它是这一行的"类别标记"，最该有色）；
- * - **竖条**：2px 细条，作为扫读时的锚点；
- * - **文字**：保持宿主原生配色 —— 可读性优先。
- *
- * 想要更强的效果可以在设置里开 `colorText`（把文字也染色）。
+ * - **短标签**：只有**确定是短标签**时才染（见下）；
+ * - **正文/摘要**：一律不染 —— 可读性优先。
  *
  * ## 只用颜色，不画竖线（用户 2026-10-16 明确要求）
  *
  * 早期版本给每个表头画了一条左侧竖条。**已全部移除** —— 用户要求"只改颜色，
- * 不要彩色竖线"。所以现在的手段只有两条：
+ * 不要彩色竖线"。
  *
- * 1. **图标上色**（svg 走 `stroke: currentColor`，给它 `color` 即可）；
- * 2. **标题文字上色**（"思考" / "执行了命令" / "已读取文件"）。
- *
- * ## 五种作用域
+ * ## 六种作用域
  *
  * | scope | 用于 | 效果 |
  * |---|---|---|
- * | `header` | 工具行、推理行 | 表头图标 + 标题上色 |
- * | `title` | 过程组标题（`data-process-activity`） | 该按钮的图标 + 文字上色 |
- * | `self` | 轨迹视图行 | 图标 + 标题上色 |
- * | `tint` | UI 控件（权限/模型选择等） | 图标**与文字**上色 |
+ * | `header` | 工具行、推理行（DisclosureRow） | 表头图标 + 短标签 |
+ * | `title` | 过程组标题，且**不带**分析正文 | 该按钮的图标 + 标签文字 |
+ * | `icon` | 过程组标题，**带**分析正文 | **只染图标** |
+ * | `self` | bash 工具行、轨迹视图行 | 图标 + 短标签 |
+ * | `tint` | UI 控件（权限/计划） | 图标**与文字**上色 |
  *
- * ⚠️ 关于 `tint` 染文字：第一版**曾因染文字出事** —— 当时把
- * `left`/`right`/`overlay` 这些槽也当成控件（它们装的是加号按钮、斜杠命令
- * 触发器等原生控件），结果弹出的斜杠菜单项被涂灰。现在控件类只保留
- * `permission`/`model`/`plan`/`activity` 四个**语义明确**的槽，且用户明确要求
- * "权限选择的那个控件可以把文字颜色也改了"，所以这里恢复染文字是安全的。
+ * ⚠️ `icon` 作用域是为用户反馈"模型分析正文被错误地上色、上色部分太多"加的：
+ * 内核把「标签 + `' · '` + 分析正文」拼进**同一个文本节点**
+ * （`ProcessGroupHeader` 的 `title`），CSS 无法只染标签，所以带正文时只染图标。
+ *
+ * ⚠️ `tint` 染文字：第一版**曾因染文字出事** —— 当时把 `left`/`right`/`overlay`
+ * 这些槽也当成控件（它们装的是加号按钮、斜杠命令触发器等原生控件），结果弹出的
+ * 斜杠菜单项被涂灰。现在控件类只剩 `permission` / `plan` 两个**语义明确**的槽，
+ * 且用户明确要求"权限选择的那个控件可以把文字颜色也改了"。
  *
  * ⚠️ 已删除的 `stripe` 作用域：`data-chat-flow-kind` 挂在**整列宽**的 flowItem
- * 上，气泡在内部靠右，竖条会被画到窗口最左缘、与内容完全脱节。
+ * 上，气泡在内部靠右，颜色会被画到窗口最左缘、与内容完全脱节。
  *
  * @param category 类别 id。
  * @param color 该主题下的颜色。
  * @param prefix 选择器前缀（深色主题传 `body[data-ds-dark-theme] `，浅色传空串）。
  *   必须**逐行**加上，不能给整段拼好的字符串加一次 —— 那样只有第一行带前缀，
  *   其余规则会变成无条件生效，深色配色就会在浅色主题下泄漏。
- * @param options.colorText 是否连摘要/正文一起染色（默认否）。
  * @returns CSS 文本。
  */
-function categoryBranch(category, color, prefix = '', options = {}) {
+function categoryBranch(category, color, prefix = '') {
   const sel = `[${CAT_ATTR}="${category}"]`;
   const p = prefix;
-  const wantText = options.colorText === true;
 
   // 折叠表头：图标是 svg（宿主用 stroke:currentColor），给它 color 即上色。
   const header = `${p}${sel}[${SCOPE_ATTR}="header"] ${HEADER_SEL}`;
   // 过程组标题（"执行了命令"）是一个独立 button，没有折叠表头结构。
   const titleScope = `${p}${sel}[${SCOPE_ATTR}="title"]`;
+  // 过程组标题**带分析正文**时：只染图标，文字保持原生。
+  const iconScope = `${p}${sel}[${SCOPE_ATTR}="icon"]`;
   const self = `${p}${sel}[${SCOPE_ATTR}="self"]`;
   const tint = `${p}${sel}[${SCOPE_ATTR}="tint"]`;
 
@@ -152,12 +151,14 @@ function categoryBranch(category, color, prefix = '', options = {}) {
    * DSH 用 CSS Module，类名形如 `<构建哈希>_<原类名>`（实测 `Ph6Lgq_title`、
    * `ZmL7Ga_title`）。**后缀是稳定的源码类名，只有前缀哈希每次构建会变**，
    * 所以 `[class*="_title"]` 能跨版本命中，比写四层结构选择器可靠得多。
+   *
+   * ⚠️ 只匹配 `_title`，**绝不匹配 `_summary`** —— 摘要里是模型输出的正文，
+   * 染它会满屏变色（用户反馈过"上色部分太多"）。
    */
   const titleSel = `${header} [class*="_title"]`;
 
-  const rules = [
-    // ① 工具行/推理行表头：图标 + 短标签。
-    //    **不染摘要与正文** —— 第一版把整段摘要一起染了，满屏紫、层级全丢。
+  return [
+    // ① 工具行/推理行表头：图标 + 短标签。摘要与正文保持原生。
     `${header} svg{color:${color}}`,
     `${titleSel}{color:${color}}`,
 
@@ -165,9 +166,16 @@ function categoryBranch(category, color, prefix = '', options = {}) {
     //    这是用户反馈"运行命令、执行命令、完成分析等条目颜色没有改变"的那批
     //    —— 它们带 `data-process-activity` 而**不带 `data-tool`**，第一版没覆盖。
     `${titleScope} svg{color:${color}}`,
-    `${titleScope}{color:${color}}`,
+    `${titleScope} [class*="_label"]{color:${color}}`,
 
-    // ③ 轨迹行：图标 + 标题。
+    // ②b 带分析正文的过程组标题：**只染图标**。
+    //    内核把「标签 + ' · ' + 正文」放在同一个文本节点里，染文字必然会连正文
+    //    一起染（用户反馈"分析正文被错误地上色"）。所以这里只给 svg 上色。
+    `${iconScope} svg{color:${color}}`,
+
+    // ③ bash 工具行 / 轨迹行：图标 + 短标签。
+    //    bash 行的根元素只有 `data-sample` + `data-variant="bash"`，
+    //    没有 `[data-disclosure-header]`，所以走这条。
     `${self} svg{color:${color}}`,
     `${self} [class*="_title"]{color:${color}}`,
 
@@ -178,20 +186,7 @@ function categoryBranch(category, color, prefix = '', options = {}) {
     //    特异度 (0,3,0) 高于 Button 的 (0,1,0)，所以能覆盖。
     `${tint} svg{color:${color}}`,
     `${tint} :is(button,[role="button"],a){color:${color}}`,
-  ];
-
-  // 可选：连摘要/正文一起染色（默认关，供"我要更花"的场景开启）。
-  if (wantText) {
-    const headerRow = `${header} ${ROW_SEL}`;
-    rules.push(
-      `${headerRow}{color:${color}}`,
-      // 覆盖宿主 .row:hover 的 color（同特异度，靠源码顺序在后取胜）。
-      `${headerRow}:hover{color:${color}}`,
-      `${self}{color:${color}}`,
-    );
-  }
-
-  return rules.join('\n');
+  ].join('\n');
 }
 
 /**
@@ -200,18 +195,17 @@ function categoryBranch(category, color, prefix = '', options = {}) {
  * @param category 类别 id。
  * @param light 浅色主题色值。
  * @param dark 深色主题色值。
- * @param options.colorText 是否连文字一起染色。
  * @returns CSS 文本（两个色值都非法时为空串）。
  */
-function categoryRules(category, light, dark, options = {}) {
+function categoryRules(category, light, dark) {
   const l = sanitizeColor(light);
   const d = sanitizeColor(dark);
   if (l === null && d === null) return '';
 
   const parts = [];
-  if (l !== null) parts.push(categoryBranch(category, l, '', options));
+  if (l !== null) parts.push(categoryBranch(category, l, ''));
   // 深色前缀逐行加在 categoryBranch 内部（见其 prefix 参数说明）。
-  if (d !== null) parts.push(categoryBranch(category, d, `${DARK} `, options));
+  if (d !== null) parts.push(categoryBranch(category, d, `${DARK} `));
   return parts.join('\n');
 }
 
@@ -220,7 +214,6 @@ function categoryRules(category, light, dark, options = {}) {
  *
  * @param colors 颜色映射；缺类别即不上色。
  * @param options.enabled 总开关；为 false 时返回空串。
- * @param options.colorText 是否连文字一起染色（默认否，只染图标与竖条）。
  * @returns CSS 文本。
  */
 export function buildStylesheet(colors, options = {}) {
@@ -229,7 +222,7 @@ export function buildStylesheet(colors, options = {}) {
   const chunks = [];
   for (const [category, value] of Object.entries(map)) {
     if (value === null || typeof value !== 'object') continue;
-    const rule = categoryRules(category, value.light, value.dark, { colorText: options.colorText });
+    const rule = categoryRules(category, value.light, value.dark);
     if (rule !== '') chunks.push(rule);
   }
   if (chunks.length === 0) return '';

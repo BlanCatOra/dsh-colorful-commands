@@ -30,8 +30,9 @@ const pairSchema = z.object({
 
 /** 可用类别（与 constants.js 的 ALL_CATEGORIES 保持一致）。 */
 const CATEGORY_NAMES = [
-  'thinking', 'command', 'danger', 'read', 'write', 'search', 'web', 'other', 'user', 'assistant',
-  'ctl-permission', 'ctl-model', 'ctl-plan', 'ctl-activity', 'ctl-toolbar',
+  'thinking', 'commandLow', 'commandMid', 'commandHigh', 'read', 'write', 'search', 'web', 'other',
+  'ctl-permission', 'ctl-plan',
+  'perm-readonly', 'perm-workspace', 'perm-full', 'perm-auto',
 ];
 
 /** 类别 → 色值对 的字典。只允许已知类别键，避免设置文件被塞进任意键。 */
@@ -53,11 +54,13 @@ const presetSchema = z.union([
  * - `enabled`：总开关（默认开）。
  * - `preset`：预设 id（默认中国传统色）。
  * - `colors`：用户逐个类别的覆盖值；只写用户改过的项。
+ *
+ * ⚠️ **不再有 `colorText` 开关。** 用户 2026-10-16 明确反馈"分析正文被错误地
+ * 上色、上色部分太多"，所以"染正文"这条路整个去掉了 —— 只染图标与短标签。
  */
 export const Config = z.object({
   enabled: z.boolean().default(true).description('是否启用着色'),
   preset: presetSchema.default('chinese'),
-  colorText: z.boolean().default(false).description('是否连正文/摘要一起染色（默认只染图标与短标签）'),
   colors: colorsSchema.default({}),
 });
 

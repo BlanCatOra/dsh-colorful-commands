@@ -8,7 +8,9 @@ import { test } from 'node:test';
 
 import {
   classifyAttrs,
-  isDangerousCommand,
+  commandCategory,
+  hasTitleDetail,
+  permissionLevel,
   readAttrs,
   _tables,
 } from '../src/classify.js';
@@ -16,12 +18,20 @@ import { buildStylesheet, resolveColors, sanitizeColor, scopedPreviewCss, CAT_AT
 import { presetColors, presetColorFor, presetCoverage } from '../src/palettes.js';
 import { CHINESE_COLORS } from '../src/data/chinese-colors.js';
 import { contrast, hueDistance, LIGHT_BG, DARK_BG } from '../src/color-engine.js';
-import { ALL_CATEGORIES, CATEGORIES, CONTROL_CATEGORIES, CATEGORY_LABELS } from '../src/constants.js';
+import { commandRisk } from '../src/constants.js';
+import {
+  ALL_CATEGORIES,
+  CATEGORIES,
+  CONTROL_CATEGORIES,
+  PERMISSION_CATEGORIES,
+  CATEGORY_LABELS,
+} from '../src/constants.js';
 
 // ── 分类 ─────────────────────────────────────────────────────────────
 
 test('工具名按宿主自己的分组口径分类', () => {
-  assert.equal(classifyAttrs({ 'data-tool': 'bash' }), 'command');
+  // 命令类不再是一个固定类别：按风险细分成三档，安全命令落低风险。
+  assert.equal(classifyAttrs({ 'data-tool': 'bash' }, { text: 'ls -la' }), 'commandLow');
   assert.equal(classifyAttrs({ 'data-tool': 'read' }), 'read');
   assert.equal(classifyAttrs({ 'data-tool': 'edit' }), 'write');
   assert.equal(classifyAttrs({ 'data-tool': 'grep' }), 'search');
@@ -37,30 +47,72 @@ test('工具名按宿主自己的分组口径分类', () => {
 test('推理行的 data-variant=think 归入思考类', () => {
   assert.equal(classifyAttrs({ 'data-variant': 'think' }), 'thinking');
   // 工具行也有 data-variant，但 data-tool 优先。
-  assert.equal(classifyAttrs({ 'data-tool': 'bash', 'data-variant': 'bash' }), 'command');
+  assert.equal(classifyAttrs({ 'data-tool': 'bash', 'data-variant': 'bash' }, { text: 'ls' }), 'commandLow');
 });
 
-test('危险命令识别：命中词表即归入 danger', () => {
-  assert.equal(classifyAttrs({ 'data-tool': 'bash' }, { text: 'rm -rf /tmp/x' }), 'danger');
-  assert.equal(classifyAttrs({ 'data-tool': 'bash' }, { text: 'sudo systemctl restart x' }), 'danger');
-  assert.equal(classifyAttrs({ 'data-tool': 'bash' }, { text: 'ls -la' }), 'command');
-  // 只对 command 类细分危险等级，read/write 不受影响。
-  assert.equal(classifyAttrs({ 'data-tool': 'read' }, { text: 'sudo' }), 'read');
+test('bash 工具行（data-sample，无 data-tool）也着色 —— 这是"运行命令"不上色的回归守卫', () => {
+  // ⚠️ 内核实测：bash 工具行走 BashRow，根元素是
+  //     <div data-sample="bash" data-variant="bash">，**没有 data-tool**。
+  // 旧版把 data-sample 当作"内层重复卡片"直接跳过，导致整类静默不着色。
+  assert.equal(classifyAttrs({ 'data-sample': 'bash', 'data-variant': 'bash' }), 'commandLow');
+  // 带危险文本时同样按风险分级。
+  assert.equal(
+    classifyAttrs({ 'data-sample': 'bash', 'data-variant': 'bash' }, { text: '运行命令 · 校验语法' }),
+    'commandLow',
+  );
+  assert.equal(
+    classifyAttrs({ 'data-sample': 'bash', 'data-variant': 'bash' }, { text: 'rm -rf /' }),
+    'commandHigh',
+  );
 });
 
-test('isDangerousCommand 对空值与非字符串安全', () => {
-  assert.equal(isDangerousCommand(''), false);
-  assert.equal(isDangerousCommand(undefined), false);
-  assert.equal(isDangerousCommand(null), false);
-  assert.equal(isDangerousCommand(123), false);
-  assert.equal(isDangerousCommand('rm -rf /'), true);
+test('命令按危险性分三档（用户要求"根据命令的危险性等分等级"）', () => {
+  assert.equal(commandRisk('ls -la'), 'low');
+  assert.equal(commandRisk('rm -rf /'), 'high');
+  assert.equal(commandRisk('sudo systemctl restart nginx'), 'mid');
+  // 高优先于中：两者都命中时取 high。
+  assert.equal(commandCategory('sudo rm -rf /'), 'commandHigh');
+  assert.equal(commandCategory('curl https://x'), 'commandMid');
+  assert.equal(commandCategory(''), 'commandLow');
+  // 空值/非字符串不得抛错。
+  assert.equal(commandRisk(undefined), 'low');
+  assert.equal(commandRisk(null), 'low');
+  assert.equal(commandRisk(42), 'low');
   // 大小写不敏感。
-  assert.equal(isDangerousCommand('DROP TABLE users'), true);
-  assert.equal(isDangerousCommand('drop table users'), true);
+  assert.equal(commandRisk('DROP TABLE users'), 'high');
+  assert.equal(commandRisk('drop table users'), 'high');
+});
+
+test('命令风险只作用于命令类，read/write 不受影响', () => {
+  assert.equal(classifyAttrs({ 'data-tool': 'read' }, { text: 'sudo rm -rf /' }), 'read');
+  assert.equal(classifyAttrs({ 'data-tool': 'edit' }, { text: 'sudo rm -rf /' }), 'write');
+});
+
+test('过程组标题带分析正文时可按标签判定（避免正文被上色）', () => {
+  // 内核把「标签 + ' · ' + 分析正文」放进同一个文本节点，CSS 无法只染标签，
+  // 所以运行时据此把作用域降级为"只染图标"。
+  assert.equal(hasTitleDetail('执行了命令'), false);
+  assert.equal(hasTitleDetail('正在分析请求 · 我看看这个 DOM'), true);
+  assert.equal(hasTitleDetail(''), false);
+  assert.equal(hasTitleDetail(undefined), false);
+});
+
+test('过程组标题（执行了命令）也必须拿到颜色', () => {
+  // 内核 processActivity 把 commands/tools 当作聚合活动；调色板里没有裸 `command`
+  // 类别，所以必须在这里细分风险，否则整类静默不着色（真机实测 69 个元素无颜色）。
+  assert.equal(classifyAttrs({ 'data-process-activity': 'commands' }, { text: '执行了命令' }), 'commandLow');
+  assert.equal(classifyAttrs({ 'data-process-activity': 'tools' }, { text: '已调用工具' }), 'commandLow');
+  assert.equal(
+    classifyAttrs({ 'data-process-activity': 'commands' }, { text: '正在运行命令 · sudo systemctl restart x' }),
+    'commandMid',
+  );
+  // 非命令类的活动不受影响。
+  assert.equal(classifyAttrs({ 'data-process-activity': 'thinking' }, { text: '正在分析请求' }), 'thinking');
+  assert.equal(classifyAttrs({ 'data-process-activity': 'read' }, { text: '已读取文件' }), 'read');
 });
 
 test('轨迹行的工具类着色，消息本体不着色', () => {
-  assert.equal(classifyAttrs({ 'data-kind': 'tool' }), 'command');
+  assert.equal(classifyAttrs({ 'data-kind': 'tool' }, { text: 'ls' }), 'commandLow');
   assert.equal(classifyAttrs({ 'data-kind': 'subtool' }), 'other');
   // 消息本体（用户/助手）刻意不着色：它们不是过程行，而且 flowItem 是整列宽，
   // 给它加竖条会跑到窗口最左缘、与靠右的气泡脱节（实测）。
@@ -72,9 +124,13 @@ test('轨迹行的工具类着色，消息本体不着色', () => {
 });
 
 test('插槽锚点分类（界面控件）', () => {
+  // 未识别等级时权限选择落兜底色。
   assert.equal(classifyAttrs({ 'data-slot': 'conversation.input.permission' }), 'ctl-permission');
-  assert.equal(classifyAttrs({ 'data-slot': 'conversation.input.model' }), 'ctl-model');
   assert.equal(classifyAttrs({ 'data-slot': 'conversation.input.plan' }), 'ctl-plan');
+  // ⚠️ 用户明确要求「语音输入和模型名称不需要颜色」：
+  // conversation.input.model 是模型名称，conversation.input.activity 是语音输入。
+  assert.equal(classifyAttrs({ 'data-slot': 'conversation.input.model' }), null);
+  assert.equal(classifyAttrs({ 'data-slot': 'conversation.input.activity' }), null);
   // 工具行槽（left/right/dock/overlay）刻意不着色：里面是加号按钮、斜杠命令
   // 触发器等原生控件，染色会波及弹出的菜单（实测菜单项被涂灰）。
   assert.equal(classifyAttrs({ 'data-slot': 'conversation.input.left' }), null);
@@ -91,10 +147,28 @@ test('插槽锚点优先于工具属性（避免同元素双重归类）', () =>
   );
 });
 
-test('内层 bash 卡片（data-sample）不再重复打标', () => {
-  // 实测：bash 工具行内部还有 data-sample="bash" + data-variant="bash" 的卡片根。
-  // 若它也打标，同一条命令会出现两条竖条、两层着色。
-  assert.equal(classifyAttrs({ 'data-sample': 'bash', 'data-variant': 'bash' }), null);
+test('权限等级按当前预设文本区分（用户要求"不同权限等级的颜色应该不同"）', () => {
+  // 文本取自内核 dsh-client-ui-permission-presets 的 label（实测）。
+  assert.equal(permissionLevel('仅可查看'), 'perm-readonly');
+  assert.equal(permissionLevel('工作区内修改'), 'perm-workspace');
+  assert.equal(permissionLevel('完全权限'), 'perm-full');
+  assert.equal(permissionLevel('Auto review EXP'), 'perm-auto');
+  // 英文界面同样命中。
+  assert.equal(permissionLevel('Read Only'), 'perm-readonly');
+  assert.equal(permissionLevel('Workspace Write'), 'perm-workspace');
+  assert.equal(permissionLevel('Full access'), 'perm-full');
+  // 未知文本返回 null（落到兜底色，而不是猜）。
+  assert.equal(permissionLevel(''), null);
+  assert.equal(permissionLevel('some other mode'), null);
+
+  // 四种等级必须真的分类到四个**不同**的类别。
+  const levels = [
+    classifyAttrs({ 'data-slot': 'conversation.input.permission' }, { text: '仅可查看' }),
+    classifyAttrs({ 'data-slot': 'conversation.input.permission' }, { text: '工作区内修改' }),
+    classifyAttrs({ 'data-slot': 'conversation.input.permission' }, { text: '完全权限' }),
+    classifyAttrs({ 'data-slot': 'conversation.input.permission' }, { text: 'Auto review' }),
+  ];
+  assert.equal(new Set(levels).size, 4, '四个权限等级必须映射到四个不同的类别');
 });
 
 test('无可识别属性时返回 null', () => {
@@ -116,9 +190,15 @@ test('分类表覆盖全部可配置类别（防止加了类别却忘了映射�
     ...Object.values(_tables.VARIANT_CATEGORY),
     ...Object.values(_tables.KIND_CATEGORY),
     ...Object.values(_tables.SLOT_CATEGORY),
-    // `danger` 不来自任何表：它是 command 类在命中危险词表时的**细化**，
-    // 因此用一条真实输入来证明它可达（而不是把它塞进表里假装覆盖）。
+    // 命令三档与权限四档不来自任何表：它们是 command / ctl-permission 的
+    // **细化**，因此用真实输入逐条证明可达（而不是把它们塞进表里假装覆盖）。
+    classifyAttrs({ 'data-tool': 'bash' }, { text: 'ls' }),
+    classifyAttrs({ 'data-tool': 'bash' }, { text: 'sudo x' }),
     classifyAttrs({ 'data-tool': 'bash' }, { text: 'rm -rf /' }),
+    classifyAttrs({ 'data-slot': 'conversation.input.permission' }, { text: '仅可查看' }),
+    classifyAttrs({ 'data-slot': 'conversation.input.permission' }, { text: '工作区内修改' }),
+    classifyAttrs({ 'data-slot': 'conversation.input.permission' }, { text: '完全权限' }),
+    classifyAttrs({ 'data-slot': 'conversation.input.permission' }, { text: 'Auto review' }),
   ]);
   for (const category of ALL_CATEGORIES) {
     assert.ok(mapped.has(category), `类别 ${category} 没有任何映射能产生它`);
@@ -142,7 +222,7 @@ test('sanitizeColor 只放行合法十六进制，其余一律拒绝', () => {
 });
 
 test('生成的样式不得再出现任何竖条（用户 2026-10-16 明确要求去掉）', () => {
-  const css = buildStylesheet({ command: { light: '#B8860B', dark: '#FFA60F' } });
+  const css = buildStylesheet({ commandLow: { light: '#B8860B', dark: '#FFA60F' } });
   assert.ok(!css.includes('box-shadow'), '不得再画彩色竖线');
   assert.ok(!css.includes('border-left'), '也不得用左边框替代');
 });
@@ -150,15 +230,35 @@ test('生成的样式不得再出现任何竖条（用户 2026-10-16 明确要�
 test('过程组标题（执行了命令/已完成分析）必须有独立作用域', () => {
   // 这是用户反馈"运行命令、执行命令、完成分析等条目颜色没有改变"的根因：
   // 它们是过程组标题，带 data-process-activity 而**不带 data-tool**。
-  const css = buildStylesheet({ command: { light: '#B8860B', dark: '#FFA60F' } });
+  const css = buildStylesheet({ commandLow: { light: '#B8860B', dark: '#FFA60F' } });
   assert.ok(
     css.includes(`[${SCOPE_ATTR}="title"]`),
     '必须为过程组标题生成 scope=title 的规则',
   );
+  // 标题文字靠 `_label` 类命中（内核 ProcessGroupHeader 的 className 是
+  // ChatGroupSeat 的 `_label`，不是 `_title`）。
   assert.ok(
-    /\[data-cc-scope="title"\]\{color:/.test(css),
+    /\[data-cc-scope="title"\] \[class\*="_label"\]\{color:/.test(css),
     '过程组标题的文字必须被染色（而不只是图标）',
   );
+});
+
+test('带分析正文的过程组标题只染图标（用户反馈"分析正文被错误地上色"）', () => {
+  const css = buildStylesheet({ thinking: { light: '#8A4B9C', dark: '#B5A0C2' } });
+  assert.ok(
+    /\[data-cc-scope="icon"\] svg\{color:/.test(css),
+    'scope=icon 必须给 svg 上色',
+  );
+  // ⚠️ 关键：icon 作用域**绝不能**染文字 —— 内核把「标签 + ' · ' + 分析正文」
+  // 拼在同一个文本节点里，染文字必然连正文一起染。
+  const iconRules = css.split('\n').filter((line) => line.includes('[data-cc-scope="icon"]'));
+  assert.ok(iconRules.length > 0, '必须有 icon 作用域规则');
+  for (const rule of iconRules) {
+    assert.ok(
+      rule.includes(' svg{'),
+      `icon 作用域只能有 svg 规则，不得染文字：${rule}`,
+    );
+  }
 });
 
 test('UI 控件必须连文字一起染色（用户要求：权限选择那个控件文字也改）', () => {

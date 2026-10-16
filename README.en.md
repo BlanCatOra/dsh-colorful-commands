@@ -2,7 +2,7 @@
 
 [中文](README.md) | English
 
-Color the DeepSeek Harness interface **by category**: thinking, commands, dangerous commands, file reads, writes, search, web requests, other tools, plus user messages and assistant replies. Interface controls near the composer (permission select, model select, …) can be colored separately.
+Color the DeepSeek Harness interface **by category**: thinking, commands (**graded by risk**), file reads, writes, search, web requests, other tools. Interface controls near the composer (permission select, plan mode) can be colored separately, and the permission select **recolors itself per access level**.
 
 Ships with three preset palettes — **Chinese traditional**, **Japanese traditional**, and **Macaron** — and lets you set every category by hand, with separate colors for light and dark themes.
 
@@ -14,7 +14,7 @@ Ships with three preset palettes — **Chinese traditional**, **Japanese traditi
 |---|---|
 | Thinking / reasoning | Reasoning rows (`data-variant="think"`) |
 | Commands | `bash` / `pwsh` |
-| **Dangerous commands** | Commands matching a danger word list (`rm -rf`, `sudo`, `mkfs`, `DROP TABLE`, …) get their own color |
+| **Command · low/medium/high risk** | `bash` / `pwsh` rows, graded by a risk word list over the command text |
 | File reads | `read` / `read_image` |
 | Writes / edits | `write` / `edit` / `run_code` |
 | Search | `grep` / `glob` (local search) |

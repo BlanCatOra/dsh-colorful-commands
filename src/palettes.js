@@ -24,7 +24,8 @@
  */
 import { ALL_CATEGORIES, PRESET_CHINESE, PRESET_JAPANESE, PRESET_MACARON } from './constants.js';
 import { CHINESE_COLORS } from './data/chinese-colors.js';
-import { buildPalette } from './color-engine.js';
+import { COMMAND_REDS } from './data/command-reds.js';
+import { buildPalette, buildRedTiers } from './color-engine.js';
 
 /**
  * 类别的语义色相（度）。
@@ -36,21 +37,40 @@ import { buildPalette } from './color-engine.js';
  * `other` / `ctl-activity` 压低饱和度上限：它们是"中性"语义，太鲜艳反而抢眼。
  */
 const SEMANTICS = {
-  // ⚠️ 紫色两条单独放宽饱和度下限：**紫在中国/日本传统色与粉彩里天生低饱和**
-  // （实测这两库的紫带候选 s 多在 21–43，卡在默认 45 门槛外，导致整类挑不到色）。
-  // 其余类别保持默认 45，避免为了凑色而把颜色挑脏。
-  thinking: { hue: 285, minSaturation: 20 },
-  command: { hue: 45 },
-  danger: { hue: 0 },
+  thinking: { hue: 285, minSaturation: 18 },
   read: { hue: 212 },
   write: { hue: 150 },
   search: { hue: 172 },
   web: { hue: 230 },
-  other: { hue: 25, minSaturation: 6, maxSaturation: 40 },
-  'ctl-permission': { hue: 0 },
-  'ctl-model': { hue: 230 },
-  'ctl-plan': { hue: 285, minSaturation: 20 },
-  'ctl-activity': { hue: 25, minSaturation: 6, maxSaturation: 40 },
+  other: { hue: 25, minSaturation: 5, maxSaturation: 45 },
+  'ctl-plan': { hue: 285, minSaturation: 18 },
+};
+
+/**
+ * 权限等级 → 语义色相（用户要求"不同权限等级的颜色应该不同"）。
+ *
+ * 单独一张表、单独一次选色，理由是**跨区域复用颜色是允许的**：内容区已经用掉了
+ * 绿（写入）、蓝（读取）、紫（思考）、青（搜索），而权限控件在输入框里，与内容区
+ * 不重叠 —— 让「仅可查看」用绿、「工作区内修改」用蓝，反而**语义一致**（绿=安全、
+ * 蓝=常规、橙=危险、紫=实验）。
+ *
+ * 若与内容区共用一次选色，去重逻辑会把它们挤到别的色相上，反而丢掉这层语义。
+ *
+ * | 等级 | 色相 | 语义 |
+ * |---|---|---|
+ * | `read-only` 仅可查看 | 150 绿 | 最安全 |
+ * | `workspace-write` 工作区内修改 | 212 蓝 | 常规 |
+ * | `danger-full-access` 完全权限 | 25 橙 | 危险 |
+ * | `auto` Auto review | 285 紫 | 实验 |
+ *
+ * `ctl-permission` 是**未识别等级时的兜底**，取蓝色（= 最常见的"工作区内修改"）。
+ */
+const PERMISSION_SEMANTICS = {
+  'perm-readonly': { hue: 150 },
+  'perm-workspace': { hue: 212 },
+  'perm-full': { hue: 25 },
+  'perm-auto': { hue: 285, minSaturation: 18 },
+  'ctl-permission': { hue: 212 },
 };
 
 /**
@@ -166,16 +186,37 @@ const MACARON_COLORS = [
   { n: '暖灰·深', x: '#7A7069', h: 28, s: 7, l: 45 },
   { n: '藕荷', x: '#C9AFC4', h: 315, s: 22, l: 74 },
   { n: '藕荷·深', x: '#8A6383', h: 315, s: 17, l: 46 },
+  // ── 补齐：粉彩体系缺橙（权限"完全权限"需要一档警示色；黄不够区分）
+  { n: '蜜橘', x: '#F2B48C', h: 25, s: 80, l: 75 },
+  { n: '蜜橘·深', x: '#B2612A', h: 25, s: 62, l: 43 },
 ];
 
 /** 缓存的算好色板（纯计算、结果确定，算一次即可）。 */
 const cache = new Map();
 
 /**
+ * 命令风险三档的**固定**配色（来自用户指定的红色系色表）。
+ *
+ * ⚠️ 三级刻意与预设无关：用户在需求里直接给了这张红色表，要求"运行命令按危险性
+ * 分等级、采用红色系"。所以不参与预设选色，而是从这张表里按色调分级固定挑出，
+ * 保证任何预设下"越危险越醒目"的语义都一致。
+ *
+ * 具体色值由 `buildRedTiers()` 从 196 色红色表里按对比度 + 色调台阶算出。
+ */
+const RED_TIERS = buildRedTiers(COMMAND_REDS);
+
+/**
+ * 权限等级配色的缓存（与预设无关，算一次即可）。
+ *
+ * ⚠️ 三个预设各算一遍会得到同一组值（因为来源不是预设色库），所以单独缓存。
+ */
+const permissionCache = new Map();
+
+/**
  * 取一个预设的完整色板（`{ 类别: { light, dark, lightName, darkName } }`）。
  *
- * 结果来自 `buildPalette`（见 `color-engine.js`）——按语义色相 + 对真实宿主
- * 背景的对比度自动挑选，**不是手写值**。
+ * 结果来自 `buildPalette` / `buildRedTiers`（见 `color-engine.js`）——按语义色相、
+ * 统一色调与对真实宿主背景的对比度自动挑选，**不是手写值**。
  *
  * @param presetId 预设 id。
  * @returns 类别 → 色值对 的映射（浅拷贝，调用方可安全改）。
@@ -191,8 +232,28 @@ export function presetColors(presetId) {
   } else if (presetId === PRESET_MACARON) {
     palette = buildPalette(MACARON_COLORS, SEMANTICS);
   }
-  cache.set(presetId, palette);
-  return { ...palette };
+  // 命令三档固定叠在预设之上（用户指定的红色系）。
+  const merged = { ...palette, ...RED_TIERS, ...permissionColorsFor(presetId) };
+  cache.set(presetId, merged);
+  return { ...merged };
+}
+
+/**
+ * 权限等级配色（按预设各自的色库挑，保证与预设风格一致）。
+ *
+ * @param presetId 预设 id。
+ * @returns 权限等级 → 色值对。
+ */
+function permissionColorsFor(presetId) {
+  if (permissionCache.has(presetId)) return permissionCache.get(presetId);
+  const source = presetId === PRESET_JAPANESE
+    ? JAPANESE_COLORS
+    : presetId === PRESET_MACARON
+      ? MACARON_COLORS
+      : CHINESE_COLORS;
+  const built = buildPalette(source, PERMISSION_SEMANTICS);
+  permissionCache.set(presetId, built);
+  return built;
 }
 
 /**

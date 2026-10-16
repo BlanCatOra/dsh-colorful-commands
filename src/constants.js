@@ -48,8 +48,9 @@ export const PRESETS = [PRESET_NONE, PRESET_CHINESE, PRESET_JAPANESE, PRESET_MAC
  */
 export const CATEGORIES = [
   'thinking',
-  'command',
-  'danger',
+  'commandLow',
+  'commandMid',
+  'commandHigh',
   'read',
   'write',
   'search',
@@ -72,62 +73,186 @@ export const CATEGORIES = [
  */
 export const CONTROL_CATEGORIES = [
   'ctl-permission',
-  'ctl-model',
   'ctl-plan',
-  'ctl-activity',
 ];
 
+/**
+ * 权限等级 → 类别。
+ *
+ * ⚠️ 用户明确要求「不同权限等级的颜色应该不同」。DSH 的四个预设（实测
+ * `dsh-client-ui-permission-presets` 的 `PRESET_LABEL_KEYS`）：
+ *
+ * | 机器值 | 中文 | 语义 |
+ * |---|---|---|
+ * | `read-only` | 仅可查看 | 最安全 |
+ * | `workspace-write` | 工作区内修改 | 中等 |
+ * | `danger-full-access` | 完全权限 | 危险 |
+ * | `auto` | Auto review | 实验/最高风险 |
+ *
+ * 这四个值写在**按钮的 `aria-label`/文本**里（`PermissionSelect` 的 trigger
+ * 文本就是当前预设的中文 label），所以运行时按文本判定，不需要读 React 状态。
+ */
+export const PERMISSION_LEVELS = {
+  '仅可查看': 'perm-readonly',
+  'Read Only': 'perm-readonly',
+  '工作区内修改': 'perm-workspace',
+  'Workspace Write': 'perm-workspace',
+  '完全权限': 'perm-full',
+  'Full access': 'perm-full',
+  'Auto review': 'perm-auto',
+};
+
 /** 全部可配置类别（内容 + 控件）。设置卡片按这个顺序渲染。 */
-export const ALL_CATEGORIES = [...CATEGORIES, ...CONTROL_CATEGORIES];
+/** 权限等级类别（用户要求"不同权限等级的颜色应该不同"）。 */
+export const PERMISSION_CATEGORIES = [
+  'perm-readonly',
+  'perm-workspace',
+  'perm-full',
+  'perm-auto',
+];
+
+export const ALL_CATEGORIES = [
+  ...CATEGORIES,
+  ...CONTROL_CATEGORIES,
+  ...PERMISSION_CATEGORIES,
+];
 
 /** 类别的中文名（内置兜底；界面文案走 locale 字典）。 */
 export const CATEGORY_LABELS = {
   thinking: '思考 / 推理',
-  command: '执行命令',
-  danger: '危险命令',
+  commandLow: '命令 · 低风险',
+  commandMid: '命令 · 中风险',
+  commandHigh: '命令 · 高风险',
   read: '读取文件',
   write: '写入 / 编辑',
   search: '搜索',
   web: '网络请求',
   other: '其他工具',
   'ctl-permission': '权限选择',
-  'ctl-model': '模型选择',
   'ctl-plan': '计划模式',
-  'ctl-activity': '活动栏',
+  'perm-readonly': '权限 · 仅可查看',
+  'perm-workspace': '权限 · 工作区内修改',
+  'perm-full': '权限 · 完全权限',
+  'perm-auto': '权限 · Auto review',
 };
 
 /**
- * 危险命令的判定词表。
+ * 命令风险等级的词表。
  *
- * 只做**前缀/包含**匹配，且仅用于给 `command` 类里更危险的那部分换色 ——
- * 判错只是颜色不对，不会有任何执行后果（本插件不执行、不拦截任何命令）。
+ * 三级，**从高到低**匹配：先看 `HIGH`，再看 `MID`，都不命中就是 `LOW`。
+ *
+ * ⚠️ 这是本插件唯一"猜"的地方，判错**只影响颜色**：本插件不执行、不拦截、
+ * 不改变任何命令的行为。所以刻意保持简单可读的包含匹配，不引入 shell 解析器
+ * —— 我们不解析命令，只按"这段文本里有没有这些危险迹象"上色。
+ *
+ * `HIGH`：不可逆或影响整机 —— 删盘、抹设备、格式化、改分区、强推、掉库。
+ * `MID`：影响面可控但需留意 —— 提权、杀进程、改权限属主、网络下载执行、
+ *        版本控制破坏性操作、包发布。
  */
-export const DANGER_PATTERNS = [
-  'rm ',
-  'rm -',
-  'sudo ',
+export const DANGER_HIGH = [
+  'rm -rf /',
+  'rm -rf /*',
+  'rm -fr /',
   'mkfs',
-  'dd if=',
-  'dd of=',
-  'shutdown',
-  'reboot',
-  'kill -9',
-  'pkill',
-  'chmod 777',
-  'chown -R',
-  ':(){',
-  '> /dev/sd',
-  'truncate ',
   'wipefs',
   'fdisk',
   'parted ',
-  'git push --force',
-  'git reset --hard',
-  'npm publish',
-  'DROP TABLE',
+  'dd if=',
+  'dd of=/dev/',
+  '> /dev/sd',
+  '> /dev/nvme',
+  'shutdown',
+  'reboot',
+  'poweroff',
+  'halt',
+  ':(){',
+  'chmod -R 777 /',
   'DROP DATABASE',
+  'DROP TABLE',
   'TRUNCATE TABLE',
+  'git push --force',
+  'git push -f',
+  'git filter-branch',
+  'GIT RESET --HARD',
 ];
+
+export const DANGER_MID = [
+  'sudo ',
+  'doas ',
+  'su -',
+  'kill -9',
+  'killall',
+  'pkill',
+  'chown -R',
+  'chmod 777',
+  'chmod -R',
+  'curl ',
+  'wget ',
+  'npm publish',
+  'pnpm publish',
+  'yarn publish',
+  'cargo publish',
+  'pip install',
+  'npm i -g',
+  'npm install -g',
+  'git reset --hard',
+  'git clean -fd',
+  'git checkout -- .',
+  'git branch -D',
+  'docker rm',
+  'docker rmi',
+  'systemctl ',
+  'service ',
+  'mount ',
+  'umount ',
+  'iptables',
+  'nft ',
+  'ufw ',
+  'userdel',
+  'groupdel',
+  'passwd ',
+  'crontab ',
+  'systemd',
+  '> /etc/',
+  '>> /etc/',
+  'truncate ',
+];
+
+/**
+ * 判定命令文本的风险等级。
+ *
+ * @param text 命令文本（表头摘要即可；可能为空/undefined）。
+ * @returns `'high'` | `'mid'` | `'low'`。
+ */
+export function commandRisk(text) {
+  if (typeof text !== 'string' || text === '') return 'low';
+  const upper = text.toUpperCase();
+  for (const pattern of DANGER_HIGH) {
+    if (upper.includes(pattern.toUpperCase())) return 'high';
+  }
+  for (const pattern of DANGER_MID) {
+    if (upper.includes(pattern.toUpperCase())) return 'mid';
+  }
+  return 'low';
+}
+
+/**
+ * 过程组标题里「标签」与「详情」的分隔符。
+ *
+ * 内核 `ui-chat` 的 `ProcessGroupHeader`（实测）：
+ *
+ * ```js
+ * const title = detail === "" ? label : `${label}${t("message.turnProcess.separator")}${detail}`;
+ * ```
+ *
+ * `t("message.turnProcess.separator")` 的中英文取值都是 `" · "`。`detail` 就是
+ * **模型的实时分析正文**（`summary.runningDetail`，推理阶段即分析文本本身）。
+ *
+ * ⚠️ 用户反馈「发送 prompt 后的模型分析，除了 tag，分析正文也被错误地上色了」——
+ * 根因正是标签与正文处在**同一个文本节点**里，CSS 无法只染标签。所以运行时
+ * 用这个分隔符判断"该标题是否带正文"：带正文时**只染图标**，不染文字。
+ */
+export const TITLE_SEPARATOR = ' · ';
 
 /** 合法十六进制颜色（#RGB / #RRGGBB）。 */
 export const HEX_RE = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;

@@ -1,9 +1,9 @@
 /**
  * dsh-colorful-commands —— 选色引擎。
  *
- * 从 742 色中国传统色库里，按**语义色相 + 可读对比度**自动挑出每个类别在
- * 浅色/深色主题下的颜色。取代了第一版"我手工挑十几个色值"的做法 ——
- * 那种做法无法保证两套主题都可读，也无法解释为什么是这个色。
+ * 从传统色库里，按**语义色相 + 统一色调 + 可读对比度**自动挑出每个类别在
+ * 浅色/深色主题下的颜色。取代了"我手工挑十几个色值"的做法 —— 那种做法无法
+ * 保证两套主题都可读，也无法解释为什么是这个色。
  *
  * ## 为什么必须自动挑选
  *
@@ -12,15 +12,22 @@
  * 实测：适合深底的亮黄 `#FFA60F` 在**白底上对比度只有 2.4**，等于看不见。
  * 所以每个类别都要有 light/dark 两个值，且各自独立满足对比度下限。
  *
+ * ## 配色为什么按「同色调」挑（用户 2026-10-16 反馈"颜色搭配丑陋"）
+ *
+ * 旧版规则是"色相窗口内取**最高饱和度**"。逐类独立取最大值的结果是：
+ * 紫色被推到刺眼的 `#A020F0`，而蓝/靛两类各自挑到几乎一样的深蓝
+ * （`#4F84FF` 与 `#4A8DDA`）—— 放在一起既撞色又不协调。
+ *
+ * 现在的规则改成**统一色调**：所有类别共用同一个目标饱和度与亮度，
+ * 只让**色相**不同。这是配色的基本手法 —— 色相负责区分，色调负责统一。
+ * 一眼看去是一套配色，而不是一堆各自为政的高饱和色。
+ *
  * ## 挑选准则（按优先级）
  *
- * 1. **色相必须贴合语义**（危险=红、命令=黄、读取=蓝…）—— 这是"一眼分类"的前提；
- * 2. **对比度达标**（默认 ≥ 3.2；纯函数可调）。阈值取 3.2 而不是 WCAG 正文的
- *    4.5，是因为这些颜色用在 **3px 竖条与图标**上（大色块/图形元素），
- *    WCAG 对非文本图形的门槛就是 3.0；
- * 3. **色相区间内取最高饱和度** —— 同样达标时，越饱和越一眼可辨；
- * 4. **对比度上限**（默认 13）—— 防止挑到近黑/近白，那种颜色虽然"对比度高"
- *    但完全丢失色相辨识度（实测：不限上限时会挑出 `#000000`、`#FFFEFA`）。
+ * 1. **对比度达标**（默认 ≥ 3.2，≤ 9.5）—— 先排除看不清的；
+ * 2. **色调贴合目标**（`targetS` / `targetL`）—— 这是"像一套配色"的关键；
+ * 3. **色相贴合语义**（危险=红、命令=红系、读取=蓝…）；
+ * 4. **与其它类别的色相拉开**（`exclude` 按色相分组去重）。
  *
  * @module dsh-colorful-commands/color-engine
  */
@@ -35,11 +42,22 @@ export const MIN_CONTRAST = 3.2;
 /**
  * 对比度上限：超过就说明接近黑/白 —— 色相辨识度会丢失。
  *
- * 实测（742 色库 + 白底）：上限 13 时 thinking 会挑到 `#4B0082`（对比度 13.0），
- * 那是近黑的靛蓝，在白底上看起来像"深灰"而不是"紫"。收到 9.5 后挑到的是
- * 真正的紫。所以这个上限不是洁癖，是**保住色相辨识度**的必要约束。
+ * 实测（742 色库 + 白底）：不限上限时会挑到 `#4B0082`（对比度 13.0）那种近黑
+ * 的靛蓝，在白底上看起来像"深灰"而不是"紫"。
  */
 export const MAX_CONTRAST = 9.5;
+
+/**
+ * 统一色调目标。
+ *
+ * 浅色主题用**中等偏深**的色（白底需要足够暗才可读）；
+ * 深色主题用**中等偏亮**的色。饱和度取中高但不是最高 —— 最高饱和度是"刺眼"
+ * 的来源，中高饱和度才有"一套配色"的整体感。
+ */
+export const TONE = {
+  light: { s: 58, l: 42 },
+  dark: { s: 52, l: 66 },
+};
 
 /** sRGB 分量线性化。 */
 function linearize(channel) {
@@ -86,48 +104,55 @@ export function hueDistance(a, b) {
 /**
  * 为一个语义目标挑一个颜色。
  *
- * 逐级放宽色相窗口（18° → 26° → 34° → 46°），保证任何语义都能落到某个色，
+ * 逐级放宽色相窗口（16° → 24° → 34° → 48°），保证任何语义都能落到某个色，
  * 而不是"没有候选"就返回空（那会让某个类别静默不上色）。
  *
  * @param colors 色库（`{ n, x, h, s, l }` 数组）。
  * @param options.hue 目标色相（度）。
  * @param options.background 目标主题底色。
- * @param options.minSaturation 最低饱和度。
- * @param options.maxSaturation 最高饱和度。
+ * @param options.targetS 目标饱和度。
+ * @param options.targetL 目标亮度。
+ * @param options.minSaturation 饱和度下限。
+ * @param options.maxSaturation 饱和度上限。
  * @param options.minContrast 对比度下限。
  * @param options.maxContrast 对比度上限。
  * @param options.exclude 已占用的 hex 集合；用于避免不同类别挑到同一个色。
+ * @param options.weightTone 色调权重（越大越追求"统一色调"）。
  * @returns 选中的色，或 null。
  */
 export function pickColor(colors, options) {
   const {
     hue,
     background,
-    minSaturation = 45,
+    targetS = TONE.light.s,
+    targetL = TONE.light.l,
+    minSaturation = 25,
     maxSaturation = 100,
     minContrast = MIN_CONTRAST,
     maxContrast = MAX_CONTRAST,
     exclude,
+    weightTone = 1,
   } = options;
 
-  for (const window of [18, 26, 34, 46]) {
+  for (const window of [16, 24, 34, 48]) {
     const candidates = [];
     for (const color of colors) {
-      if (hueDistance(color.h, hue) > window) continue;
+      const dh = hueDistance(color.h, hue);
+      if (dh > window) continue;
       if (color.s < minSaturation || color.s > maxSaturation) continue;
       // 去重：别的类别（或本类别的另一主题）已经用了这个色就跳过。
       // 实测不加去重时 read 与 web 会挑到同一个 `#4F84FF`，两个类别看起来一样。
       if (exclude !== undefined && exclude.has(color.x)) continue;
       const ratio = contrast(color.x, background);
       if (ratio < minContrast || ratio > maxContrast) continue;
-      candidates.push({ color, ratio });
+      // 打分：色调偏差为主，色相偏离为辅。乘权重后可调"统一 vs 贴色相"的取舍。
+      const toneCost = (Math.abs(color.s - targetS) + Math.abs(color.l - targetL)) * weightTone;
+      const score = toneCost + dh * 0.6;
+      candidates.push({ color, score, dh });
     }
     if (candidates.length > 0) {
-      // 同窗口内：饱和度高的优先（更一眼可辨）；并列时取色相更贴合的。
-      candidates.sort((a, b) => {
-        if (b.color.s !== a.color.s) return b.color.s - a.color.s;
-        return hueDistance(a.color.h, hue) - hueDistance(b.color.h, hue);
-      });
+      // 同窗口内：综合分最低者胜出（色调最贴、色相最合）。
+      candidates.sort((a, b) => (a.score !== b.score ? a.score - b.score : a.dh - b.dh));
       return candidates[0].color;
     }
   }
@@ -139,8 +164,12 @@ export function pickColor(colors, options) {
  *
  * @typedef {object} SemanticSpec
  * @property {number} hue 目标色相（度）。
- * @property {number} [minSaturation] 饱和度下限（默认 45）。
+ * @property {number} [targetS] 目标饱和度（默认取 `TONE`）。
+ * @property {number} [targetL] 目标亮度（默认取 `TONE`）。
+ * @property {number} [minSaturation] 饱和度下限（默认 25）。
  * @property {number} [maxSaturation] 饱和度上限（默认 100）。
+ * @property {number} [minContrast] 对比度下限（覆盖全局默认）。
+ * @property {number} [maxContrast] 对比度上限（覆盖全局默认）。
  */
 
 /**
@@ -153,36 +182,39 @@ export function pickColor(colors, options) {
 export function buildPalette(colors, specs) {
   const out = {};
   /**
-   * 已占用的色值，按**色相**分组去重。
+   * 每个色相挑中的色值（同色相复用，跨色相才互斥）。
    *
-   * 关键点：`thinking` 与 `ctl-plan` 是同一语义（都是紫，hue 285），
-   * 它们**共用同一个颜色是正确的** —— 用户看到"紫=思考/计划"才有一致性。
-   * 所以去重只在**不同色相**之间做，避免的是"危险色和读取色撞成同一个"
-   * 那种真正的问题。
+   * 关键点：`thinking` 与 `ctl-plan` 是同一语义（都是紫），或三个命令等级同属
+   * 红色系 —— 它们**共用同一族颜色是正确的**。所以按**色相**分组去重，
+   * 避免的是"危险色和读取色撞成同一个"那种真正的问题。
    */
-  /** 每个色相挑中的色值（同色相复用，跨色相才互斥）。 */
   const chosenByHue = new Map();
   for (const [key, spec] of Object.entries(specs)) {
-    // 只排除**其它色相**已占用的颜色；同色相（如 thinking 与 ctl-plan 都是紫）
-    // 就该挑到同一个色 —— 那正是"同语义同色"的一致性。
+    // 只排除**其它色相**已占用的颜色。
     const used = new Set();
     for (const [hue, hexes] of chosenByHue) {
       if (hue === spec.hue) continue;
       for (const hex of hexes) used.add(hex);
     }
-    const light = pickColor(colors, {
+    const common = {
       hue: spec.hue,
-      background: LIGHT_BG,
       minSaturation: spec.minSaturation,
       maxSaturation: spec.maxSaturation,
+      minContrast: spec.minContrast,
+      maxContrast: spec.maxContrast,
       exclude: used,
+    };
+    const light = pickColor(colors, {
+      ...common,
+      background: LIGHT_BG,
+      targetS: spec.targetS ?? TONE.light.s,
+      targetL: spec.targetL ?? TONE.light.l,
     });
     const dark = pickColor(colors, {
-      hue: spec.hue,
+      ...common,
       background: DARK_BG,
-      minSaturation: spec.minSaturation,
-      maxSaturation: spec.maxSaturation,
-      exclude: used,
+      targetS: spec.targetS ?? TONE.dark.s,
+      targetL: spec.targetL ?? TONE.dark.l,
     });
     // 任一侧挑不到就整个类别跳过（不上色，而不是产出坏值）。
     if (light === null || dark === null) continue;
@@ -196,6 +228,68 @@ export function buildPalette(colors, specs) {
       lightName: light.n,
       darkName: dark.n,
     };
+  }
+  return out;
+}
+
+/**
+ * 从**同一个红色系色库**里挑出「低/中/高」三个风险等级的颜色。
+ *
+ * 用户要求「运行命令应该根据命令的危险性等分等级上色，采用红色系」，所以
+ * 三级都用红（色相窗口放宽到覆盖粉红→紫红整族），靠**色调深浅**分级：
+ *
+ * - 浅色主题（白底）：低风险最浅、高风险最深；
+ * - 深色主题（`#151517`）：低风险最暗、高风险最亮。
+ *
+ * 也就是说**两个主题下"越危险越醒目"的方向一致**（都是对比度更高那一侧），
+ * 而同一主题内三级之间保持可分辨的亮度台阶。
+ *
+ * @param colors 色库（红色系）。
+ * @param options.hueCenter 色相中心（默认 5 度，正红略偏橙）。
+ * @param options.hueWindow 色相窗口（默认 40 度，覆盖 #E3256B 这类偏紫的红）。
+ * @returns `{ commandLow, commandMid, commandHigh }`（缺项表示该级挑不到色）。
+ */
+export function buildRedTiers(colors, options = {}) {
+  const hueCenter = options.hueCenter ?? 5;
+  const hueWindow = options.hueWindow ?? 40;
+  const family = colors.filter((c) => hueDistance(c.h, hueCenter) <= hueWindow);
+  const source = family.length >= 6 ? family : colors;
+
+  /** 一个等级的目标色调（浅色主题 / 深色主题）。 */
+  const TIERS = [
+    { key: 'commandHigh', lightL: 34, darkL: 72, lightS: 62, darkS: 56, minC: 4.6 },
+    { key: 'commandMid', lightL: 44, darkL: 64, lightS: 58, darkS: 52, minC: 3.8 },
+    { key: 'commandLow', lightL: 56, darkL: 56, lightS: 52, darkS: 46, minC: 3.2 },
+  ];
+
+  const out = {};
+  const usedLight = new Set();
+  const usedDark = new Set();
+  for (const tier of TIERS) {
+    const light = pickColor(source, {
+      hue: hueCenter,
+      background: LIGHT_BG,
+      targetS: tier.lightS,
+      targetL: tier.lightL,
+      minSaturation: 20,
+      minContrast: tier.minC,
+      exclude: usedLight,
+      weightTone: 1,
+    });
+    const dark = pickColor(source, {
+      hue: hueCenter,
+      background: DARK_BG,
+      targetS: tier.darkS,
+      targetL: tier.darkL,
+      minSaturation: 18,
+      minContrast: tier.minC,
+      exclude: usedDark,
+      weightTone: 1,
+    });
+    if (light === null || dark === null) continue;
+    usedLight.add(light.x);
+    usedDark.add(dark.x);
+    out[tier.key] = { light: light.x, dark: dark.x, lightName: light.n, darkName: dark.n };
   }
   return out;
 }
