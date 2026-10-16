@@ -281,14 +281,39 @@ test('聚合过程组标题（执行了命令）必须拿到颜色', () => {
   assert.equal(tagElement(running), 'commandMid', '聚合标题里的危险命令也要按风险分级');
 });
 
-test('过程组标题一律用 title 作用域（标签与详情靠切分区分，不再整段不染）', () => {
+test('过程组标题按"有无详情"分成两个作用域（这是消除闪烁的关键）', () => {
+  // ⚠️ 不能只用 `title` + CSS `:not(:has())` 兜底：兜底规则会在"切分被 React
+  // 重渲染冲掉"的那一帧重新匹配上整段标题，正文被整段染色、下一帧再切回来，
+  // 视觉上就是闪烁（用户实测反馈"正文的上色是闪烁的"）。
   const withDetail = makeElement({ 'data-process-activity': 'reading' }, { text: '正在分析请求 · 我看看这个 DOM 结构' });
   tagElement(withDetail);
-  assert.equal(withDetail.getAttribute(SCOPE_ATTR), 'title');
+  assert.equal(withDetail.getAttribute(SCOPE_ATTR), 'title-part', '有详情 → 只染切出来的标签段');
 
   const pureLabel = makeElement({ 'data-process-activity': 'commands' }, { text: '执行了命令' });
   tagElement(pureLabel);
-  assert.equal(pureLabel.getAttribute(SCOPE_ATTR), 'title');
+  assert.equal(pureLabel.getAttribute(SCOPE_ATTR), 'title', '无详情 → 整段标签可染');
+});
+
+test('过程组标题：切分被 React 冲掉后，作用域必须回到 title-part（不得整段染色）', () => {
+  // 模拟"切分短暂失效"：元素被标成 title-part 后，标签段消失、文本变成整段标题。
+  const doc = makeFakeDoc();
+  const title = doc.createElement('button');
+  title.setAttribute('data-process-activity', 'commands');
+  const label = doc.createElement('span');
+  label.className = '_7s-ua_label';
+  label.textContent = '正在分析请求 · 正文很长的一段分析';
+  title.appendChild(label);
+  tagElement(title);
+  assert.equal(title.getAttribute(SCOPE_ATTR), 'title-part');
+
+  // React 重渲染：标签段没了，文本仍是"标签 · 详情"。
+  label.textContent = '正在分析请求 · 正文很长的一段分析';
+  tagElement(title);
+  assert.equal(
+    title.getAttribute(SCOPE_ATTR),
+    'title-part',
+    '即使切分失效也必须留在 title-part，绝不能退回 title（那会把正文染色）',
+  );
 });
 
 test('插槽锚点用 tint 作用域（控件不加竖条）', () => {

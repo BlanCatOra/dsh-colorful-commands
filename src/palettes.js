@@ -44,6 +44,8 @@ const SEMANTICS = {
   web: { hue: 230 },
   // 重试是"等待/重来"语义，用琥珀橙（与"其他工具"的哑褐拉开，也和命令的红色系区分）。
   retry: { hue: 35, minSaturation: 30 },
+  // 压缩是"上下文被收拢"的中性事件，用青蓝（与 read 的天青、search 的石绿拉开）。
+  compaction: { hue: 195, minSaturation: 25 },
   other: { hue: 25, minSaturation: 5, maxSaturation: 45 },
   'ctl-plan': { hue: 285, minSaturation: 18 },
 };
@@ -191,6 +193,10 @@ const MACARON_COLORS = [
   // ── 补齐：粉彩体系缺橙（权限"完全权限"需要一档警示色；黄不够区分）
   { n: '蜜橘', x: '#F2B48C', h: 25, s: 80, l: 75 },
   { n: '蜜橘·深', x: '#B2612A', h: 25, s: 62, l: 43 },
+  // ── 补齐：缺青蓝（"上下文压缩"落在 h195，色库里没有足够近的青蓝会被
+  //    read 抢走候选色，导致 compaction 只能降级复用而与之撞色）。
+  { n: '松石', x: '#A8DAD6', h: 175, s: 55, l: 76 },
+  { n: '松石·深', x: '#27808F', h: 192, s: 57, l: 36 },
 ];
 
 /** 缓存的算好色板（纯计算、结果确定，算一次即可）。 */

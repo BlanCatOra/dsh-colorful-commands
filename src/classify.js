@@ -153,6 +153,22 @@ export function isRetryRow(attrs) {
 }
 
 /**
+ * 上下文压缩行（`<div class="<hash>_compactionRow">`）的识别。
+ *
+ * 与重试行同因：内核只给了 class，没有语义化属性。
+ *
+ * @param attrs 属性快照。
+ * @returns 是否为压缩行。
+ */
+export function isCompactionRow(attrs) {
+  const cls = attrs?.class;
+  if (typeof cls !== 'string') return false;
+  return cls.includes('_compactionRow')
+    || cls.includes('_compactionButton')
+    || cls.includes('_compactionLeading');
+}
+
+/**
  * 判断一段文本命中的权限等级。
  *
  * 用户明确要求「不同权限等级的颜色应该不同」。`PermissionSelect` 的触发按钮
@@ -184,8 +200,9 @@ export function permissionLevel(text) {
 export function classifyAttrs(attrs, options = {}) {
   const a = attrs ?? {};
 
-  // 0. 重试行：它没有任何语义化 data-* 属性，只能靠类名后缀识别。
+  // 0. 重试行 / 压缩行：它们没有任何语义化 data-* 属性，只能靠类名后缀识别。
   if (isRetryRow(a)) return 'retry';
+  if (isCompactionRow(a)) return 'compaction';
 
   // 1. 插槽锚点优先：控件类与内容类不重叠，先判更具体的。
   const slot = a['data-slot'];

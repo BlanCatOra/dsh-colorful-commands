@@ -21,7 +21,9 @@ import {
   contrast,
   hueDistance,
   deltaE,
+  hsvSaturation,
   MIN_TIER_DELTA_E,
+  TEXT_MIN_CONTRAST,
   LIGHT_BG,
   DARK_BG,
 } from '../src/color-engine.js';
@@ -208,8 +210,9 @@ test('分类表覆盖全部可配置类别（防止加了类别却忘了映射�
     classifyAttrs({ 'data-slot': 'conversation.input.permission' }, { text: '工作区内修改' }),
     classifyAttrs({ 'data-slot': 'conversation.input.permission' }, { text: '完全权限' }),
     classifyAttrs({ 'data-slot': 'conversation.input.permission' }, { text: 'Auto review' }),
-    // `retry` 只由 CSS Module 类名后缀识别（内核没给语义化属性）。
+    // `retry` / `compaction` 只由 CSS Module 类名后缀识别（内核没给语义化属性）。
     classifyAttrs({ class: 'Sixlwa_retryRow' }),
+    classifyAttrs({ class: 'Sixlwa_compactionRow' }),
   ]);
   for (const category of ALL_CATEGORIES) {
     assert.ok(mapped.has(category), `类别 ${category} 没有任何映射能产生它`);
@@ -246,27 +249,35 @@ test('过程组标题（执行了命令/已完成分析）必须有独立作用�
     css.includes(`[${SCOPE_ATTR}="title"]`),
     '必须为过程组标题生成 scope=title 的规则',
   );
-  // 标题文字靠运行时切出来的标签段命中（见 dom.js 的 splitTitleLabel）。
+  // 无详情的标题：整段标签可染。
   assert.ok(
-    /\[data-cc-scope="title"\] \[data-cc-part="label"\]\{color:/.test(css),
-    '过程组标题的标签文字必须被染色',
+    /\[data-cc-scope="title"\] \[class\*="_label"\]\{color:/.test(css),
+    '无详情的过程组标题文字必须被染色',
+  );
+  // 有详情的标题：只染切出来的标签段（见 dom.js 的 splitTitleLabel）。
+  assert.ok(
+    /\[data-cc-scope="title-part"\] \[data-cc-part="label"\]\{color:/.test(css),
+    '有详情时只染标签段',
   );
 });
 
-test('标签与详情必须分开染：只染 [data-cc-part="label"]，不染整段 _label', () => {
-  // ⚠️ 用户先反馈"分析正文被错误地上色"，后反馈"上色不完全"。根因同一个：
+test('有详情的标题绝不整段染（否则正文会被上色 / 闪烁）', () => {
+  // ⚠️ 用户先后反馈"分析正文被错误地上色（闪烁）"与"上色不完全"，根因同一个：
   // 内核把「标签 + ' · ' + 详情」拼成**同一个文本节点**。
   // 只染整段 → 正文被染；整段不染 → 标签也没色。
-  // 正确解是运行时把标签切出来，样式只染那一段。
   const css = buildStylesheet({ thinking: { light: '#8A4B9C', dark: '#B5A0C2' } });
+  const partScopeRules = css.split('\n').filter((l) => l.includes('[data-cc-scope="title-part"]'));
+  assert.ok(partScopeRules.length > 0, '必须有 title-part 作用域规则');
+  for (const rule of partScopeRules) {
+    assert.ok(
+      !/ \[class\*="_label"\]\{/.test(rule),
+      `title-part 绝不能整段染 _label（正文会被上色）：${rule}`,
+    );
+  }
+  // 不允许用 `:not(:has(...))` 兜底 —— 那一帧会把正文整段染色（闪烁根因）。
   assert.ok(
-    /\[data-cc-scope="title"\] \[data-cc-part="label"\]\{color:/.test(css),
-    '必须染标签段',
-  );
-  // 兜底规则：没有详情（无 data-cc-part）时才允许整段染，且必须用 :not(:has(...)) 限定。
-  assert.ok(
-    /\[data-cc-scope="title"\] \[class\*="_label"\]:not\(:has\(\[data-cc-part\]\)\)\{color:/.test(css),
-    '无详情时整段可染，但必须排除已切分的标题',
+    !/:not\(:has\(\[data-cc-part\]\)\)/.test(css),
+    '不得用 :has() 兜底整段染色（切分短暂失效时会闪一下正文色）',
   );
 });
 
@@ -466,15 +477,35 @@ test('「不预设」只需保证命令与权限仍按等级上色（这是刻�
 // 目标亮度、再让 pickColor 挑最近的，结果三档撞到几乎同一个色（深色主题实测
 // #C45A65 / #C74A4D / #D46A6A），而且**中档比低档更暗**，与"越危险越醒目"相反。
 
-test('命令三档的对比度必须严格单调递增（越危险越醒目）', () => {
+test('命令三档的**饱和度**必须严格递增（越危险越浓）', () => {
+  // ⚠️ 分级轴是饱和度，不是对比度 —— 这一点前后错过两次。
+  // 深色主题下"高对比度"必然来自**亮**色，而传统红里偏亮的都是粉调（低饱和），
+  // 于是按对比度分级会得到 橙红(s85) → 粉(s69) → 浅粉(s68)：对比度递增，
+  // 但"最危险"看起来最淡，语义正好反了。
+  for (const presetId of ['chinese', 'japanese', 'macaron']) {
+    const pal = presetColors(presetId);
+    for (const mode of ['light', 'dark']) {
+      const sat = ['commandLow', 'commandMid', 'commandHigh']
+        .map((c) => hsvSaturation(pal[c][mode]));
+      assert.ok(
+        sat[0] < sat[1] && sat[1] < sat[2],
+        `${presetId}/${mode} 三档饱和度必须递增，实际 ${sat.join(' → ')}`,
+      );
+    }
+  }
+});
+
+test('命令三档每一档都必须达到正文对比度门槛（标签是文本，不是图标）', () => {
   for (const presetId of ['chinese', 'japanese', 'macaron']) {
     const pal = presetColors(presetId);
     for (const [bg, mode] of [[LIGHT_BG, 'light'], [DARK_BG, 'dark']]) {
-      const crs = ['commandLow', 'commandMid', 'commandHigh'].map((c) => contrast(pal[c][mode], bg));
-      assert.ok(
-        crs[0] < crs[1] && crs[1] < crs[2],
-        `${presetId}/${mode} 三档对比度必须递增，实际 ${crs.map((v) => v.toFixed(2)).join(' → ')}`,
-      );
+      for (const cat of ['commandLow', 'commandMid', 'commandHigh']) {
+        const cr = contrast(pal[cat][mode], bg);
+        assert.ok(
+          cr >= TEXT_MIN_CONTRAST,
+          `${presetId}/${mode}/${cat} 对比度 ${cr.toFixed(2)} 低于文本门槛 ${TEXT_MIN_CONTRAST}`,
+        );
+      }
     }
   }
 });
@@ -512,4 +543,42 @@ test('deltaE 与对比度的基本性质', () => {
   assert.equal(deltaE('#000000', '#000000'), 0);
   assert.ok(deltaE('#000000', '#FFFFFF') > 90, '黑白 ΔE 应该很大');
   assert.ok(deltaE('#FF0000', '#FF0001') < 1, '几乎相同的色 ΔE 应接近 0');
+});
+
+
+test('每个预设都必须为全部内容类别产出颜色（不得静默丢弃类别）', () => {
+  // ⚠️ 血亏教训：`buildPalette` 原本在"挑不到色"时直接 `continue`，把整个类别丢掉。
+  // `compaction` 与 `read` 色相只差 17 度（195 vs 212），macaron 预设下唯一合适的
+  // 青蓝被 `read` 先占走，`compaction` 就**静默消失** —— 表现是"设置里明明选了
+  // 颜色、界面就是不上色"。这种"配置了却没效果"的缺陷最难定位。
+  // 现在挑不到会逐级放宽重挑，本测试锁死"任何预设都不得缺类别"。
+  const required = ['thinking', 'commandLow', 'commandMid', 'commandHigh',
+    'read', 'write', 'search', 'web', 'retry', 'compaction', 'other'];
+  for (const presetId of ['chinese', 'japanese', 'macaron']) {
+    const pal = presetColors(presetId);
+    const missing = required.filter((k) => pal[k] === undefined);
+    assert.deepEqual(missing, [], `${presetId} 缺少类别：${missing.join(', ')}`);
+    for (const key of required) {
+      assert.ok(pal[key].light && pal[key].dark, `${presetId}/${key} 缺主题色值`);
+    }
+  }
+});
+
+test('同预设内不同内容类别不得挑到完全相同的色（去重仍然生效）', () => {
+  // 放宽去重是为了"别丢掉类别"，但**不能退化成所有类别一个颜色**。
+  for (const presetId of ['chinese', 'japanese', 'macaron']) {
+    const pal = presetColors(presetId);
+    for (const mode of ['light', 'dark']) {
+      const keys = ['thinking', 'read', 'write', 'search', 'web', 'retry', 'compaction'];
+      const seen = new Map();
+      for (const k of keys) {
+        const hex = pal[k][mode];
+        if (seen.has(hex)) {
+          // 允许同色相的语义复用（thinking/ctl-plan 这类），但这里选的几个类别色相都不同。
+          assert.fail(`${presetId}/${mode}: ${seen.get(hex)} 与 ${k} 撞成同一个色 ${hex}`);
+        }
+        seen.set(hex, k);
+      }
+    }
+  }
 });

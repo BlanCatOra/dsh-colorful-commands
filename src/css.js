@@ -117,9 +117,17 @@ export function sanitizeColor(value) {
  * | scope | 用于 | 效果 |
  * |---|---|---|
  * | `header` | 工具行、推理行（DisclosureRow） | 表头图标 + 短标签 |
- * | `title` | 过程组标题 | 该按钮的图标 + **标签文字**（详情不受影响） |
+ * | `title` | 过程组标题，**没有**详情（纯标签） | 该按钮的图标 + 整段标签文字 |
+ * | `title-part` | 过程组标题，**有**详情 | 该按钮的图标 + **只染切出来的标签段** |
  * | `self` | bash 工具行、轨迹视图行 | 图标 + 短标签 |
  * | `tint` | UI 控件（权限/计划） | 图标**与文字**上色 |
+ *
+ * ⚠️ 为什么"有详情"要单独一个作用域，而不是用 `:has()` 兜底：
+ * 用 `[class*="_label"]:not(:has([data-cc-part]))` 看似省事，但它会在
+ * **切分被 React 重渲染冲掉的那一帧**重新匹配上整段标题 —— 于是正文被整段染色，
+ * 下一帧再切回来，视觉上就是**闪烁**（用户实测反馈过"正文的上色是闪烁的"）。
+ * 拆成两个显式作用域后，有详情的元素永远只认 `[data-cc-part]`：
+ * 切分短暂失效时表现为"标签那一瞬间没颜色"，而不是"正文被染色"。
  *
  * ⚠️ 过程组标题的「标签」与「详情」在内核里是**同一个文本节点**
  * （`ProcessGroupHeader` 的 `title`）。运行时会先把标签切出来包一层
@@ -152,6 +160,8 @@ function categoryBranch(category, color, prefix = '') {
   const header = `${p}${sel}[${SCOPE_ATTR}="header"] ${HEADER_SEL}`;
   // 过程组标题（"执行了命令"）是一个独立 button，没有折叠表头结构。
   const titleScope = `${p}${sel}[${SCOPE_ATTR}="title"]`;
+  // 有详情的过程组标题：只染运行时切出来的标签段（见 dom.js 的 splitTitleLabel）。
+  const partScope = `${p}${sel}[${SCOPE_ATTR}="title-part"]`;
   const self = `${p}${sel}[${SCOPE_ATTR}="self"]`;
   const tint = `${p}${sel}[${SCOPE_ATTR}="tint"]`;
 
@@ -176,13 +186,9 @@ function categoryBranch(category, color, prefix = '') {
     //    这是用户反馈"运行命令、执行命令、完成分析等条目颜色没有改变"的那批
     //    —— 它们带 `data-process-activity` 而**不带 `data-tool`**，第一版没覆盖。
     `${titleScope} svg{color:${color}}`,
-    //    文字：只染运行时切出来的**标签**那一段（见 dom.js 的 splitTitleLabel）。
-    //    内核把「标签 · 详情」放在同一个文本节点里，直接染 `_label` 会连分析正文
-    //    一起染（用户反馈过"上色部分太多"）；只染 `[data-cc-part="label"]` 则
-    //    标签有色、详情保持原生。
-    `${titleScope} [${PART_ATTR}="label"]{color:${color}}`,
-    //    兜底：标题**没有**详情时（历史/已折叠的组标题就是纯标签）整段都可以染。
-    `${titleScope} [class*="_label"]:not(:has([${PART_ATTR}])){color:${color}}`,
+    //    无详情（纯标签）时整段染；有详情时只染切出来的标签段。
+    `${titleScope} [class*="_label"]{color:${color}}`,
+    `${partScope} [${PART_ATTR}="label"]{color:${color}}`,
 
     // ③ bash 工具行 / 轨迹行：图标 + 短标签。
     //    bash 行的根元素只有 `data-sample` + `data-variant="bash"`，

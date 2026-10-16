@@ -61,6 +61,7 @@ export const CATEGORIES = [
   'search',
   'web',
   'retry',
+  'compaction',
   'other',
 ];
 
@@ -120,6 +121,16 @@ export const PERMISSION_LEVELS = {
  */
 export const CATEGORY_RETRY = 'retry';
 
+/**
+ * 上下文压缩行的类别。
+ *
+ * ⚠️ 用户反馈「上下文压缩没有上色」。根因：内核 `CompactionItem` 渲染的是
+ * `<div class="<hash>_compactionRow"><button class="<hash>_compactionButton">`，
+ * **没有任何语义化 `data-*` 钩子**（只有 `data-compaction-icon` 在图标上），
+ * 所以既有的属性选择器一个都匹配不到它。
+ */
+export const CATEGORY_COMPACTION = 'compaction';
+
 /** 权限等级类别（用户要求"不同权限等级的颜色应该不同"）。 */
 export const PERMISSION_CATEGORIES = [
   'perm-readonly',
@@ -145,6 +156,7 @@ export const CATEGORY_LABELS = {
   search: '搜索',
   web: '网络请求',
   retry: '重试模型请求',
+  compaction: '上下文压缩',
   other: '其他工具',
   'ctl-permission': '权限选择',
   'ctl-plan': '计划模式',

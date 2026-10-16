@@ -39,6 +39,14 @@ export const DARK_BG = '#151517';
 
 /** 对比度下限：非文本图形元素（WCAG 1.4.11）。 */
 export const MIN_CONTRAST = 3.2;
+
+/**
+ * 对比度下限：**文本**（WCAG 2.1 AA 正文）。
+ *
+ * 命令分级色会同时用在**标签文字**上（"运行命令"这类 13–14px 文本），所以
+ * 不能按图标那个 3.0/3.2 的非文本门槛来，否则大字勉强能看、小字发虚。
+ */
+export const TEXT_MIN_CONTRAST = 4.5;
 /**
  * 对比度上限：超过就说明接近黑/白 —— 色相辨识度会丢失。
  *
@@ -175,6 +183,24 @@ export function pickColor(colors, options) {
 /**
  * 按语义规格，为每个键挑出 light/dark 两值。
  *
+ * ## 两遍处理：先严格挑，再补漏
+ *
+ * 每个类别独立挑色（`pickColor` 排除其它色相已占用的颜色，避免"危险色和读取色
+ * 撞成同一个"）。但**独立挑色会漏配**：`compaction`(195°) 与 `read`(212°)
+ * 只差 17 度，macaron 预设里唯一合适的青蓝被先处理的 `read` 占走后，
+ * `compaction` 就没候选了。
+ *
+ * ⚠️ 第一版遇到这种情况直接 `continue`，把**整个类别静默丢弃** ——
+ * 表现是"设置里明明选了颜色、界面就是不上色"，极难定位。
+ * 第二版改成"当场放宽重挑"，结果**又撞车**：放宽后 `compaction` 复用了 `read`
+ * 已占用的色，两个类别看起来一模一样（被新增的去重测试当场抓住）。
+ *
+ * 现在分两遍，两个要求同时满足：
+ *   第一遍：严格排除其它色相已占用的色 —— 保证不撞车；
+ *   第二遍：只给第一遍**没挑到**的类别补漏，允许同色相复用，
+ *          但**仍然排除任何类别已用的具体色值** —— 保证"有颜色"且不重复；
+ *          连排除都不要还挑不到，才放最后兜底（有颜色优先于不撞色）。
+ *
  * @param colors 色库。
  * @param specs 语义 → 规格。
  * @returns `{ [key]: { light, dark, lightName, darkName } }`。
@@ -189,45 +215,131 @@ export function buildPalette(colors, specs) {
    * 避免的是"危险色和读取色撞成同一个"那种真正的问题。
    */
   const chosenByHue = new Map();
-  for (const [key, spec] of Object.entries(specs)) {
-    // 只排除**其它色相**已占用的颜色。
+  /** 所有已被任何类别占用的具体色值（补漏时仍然要避开）。 */
+  const usedColors = new Set();
+  /** 第一遍没挑到的类别，留到第二遍补漏。 */
+  const pending = [];
+
+  /**
+   * 每个色值"归属"于哪个类别 —— 按**色相最近**判定。
+   *
+   * ⚠️ 这是修掉"类别互相抢色"的关键，光靠 `exclude` 挡不住。
+   *
+   * 反例（macaron 预设实测）：`read` 的语义色相是 212°，`compaction` 是 195°。
+   * 色库里 `婴儿蓝·深` 的实际色相是 **200°** —— 它离 compaction 只差 5°、
+   * 离 read 差 12°，**本该属于 compaction**。但引入顺序里 `read` 先挑，
+   * 而打分函数以"色调偏差"为主（`|s-targetS| + |l-targetL|`），色相只占 0.6/度：
+   * `婴儿蓝·深` 的色调更贴 read 的目标，于是 read 把它抢走，
+   * 轮到 compaction 时已经无候选（同色相的近邻又都被占），
+   * 只能降级复用 → **两个类别颜色一样**（被去重测试当场抓住）。
+   *
+   * 所以除了"排除已用的色"，还要限定**这个色本来就该归谁**：
+   * 一个色值只允许被"色相离它最近"的类别挑中。同色相多类别（如
+   * `thinking` 与 `ctl-plan` 都是 285°）并列归属，两者都可以用。
+   */
+  const entries = Object.entries(specs);
+  const ownersOf = (color) => {
+    let best = Infinity;
+    const winners = [];
+    for (const [key, spec] of entries) {
+      const d = hueDistance(color.h, spec.hue);
+      if (d < best - 1e-9) {
+        best = d;
+        winners.length = 0;
+        winners.push(key);
+      } else if (Math.abs(d - best) <= 1e-9) {
+        winners.push(key);
+      }
+    }
+    return winners;
+  };
+  /** 预先算好每个 hex 的归属，避免每个类别重复计算。 */
+  const ownerCache = new Map();
+  const ownedBy = (key) => (color) => {
+    let owners = ownerCache.get(color.x);
+    if (owners === undefined) {
+      owners = ownersOf(color);
+      ownerCache.set(color.x, owners);
+    }
+    return owners.includes(key);
+  };
+
+  /**
+   * 尝试为一个类别挑色。
+   *
+   * @param key 类别键。
+   * @param spec 语义规格。
+   * @param allowCrossHueReuse 是否允许复用其它色相已占用的色（补漏阶段为 true）。
+   * @returns 成功时返回该类别配色，失败返回 null。
+   */
+  const attempt = (key, spec, { allowCrossHueReuse, requireOwnership }) => {
     const used = new Set();
+    // 只排除**其它色相**已占用的颜色。
     for (const [hue, hexes] of chosenByHue) {
       if (hue === spec.hue) continue;
       for (const hex of hexes) used.add(hex);
     }
-    const common = {
+    if (!allowCrossHueReuse) {
+      for (const hex of usedColors) used.add(hex);
+    }
+    // 严格阶段只允许"本该属于本类别"的颜色，避免抢走邻近类别的天然匹配。
+    const pool = requireOwnership ? colors.filter(ownedBy(key)) : colors;
+    const pick = (theme) => pickColor(pool, {
       hue: spec.hue,
       minSaturation: spec.minSaturation,
       maxSaturation: spec.maxSaturation,
       minContrast: spec.minContrast,
       maxContrast: spec.maxContrast,
       exclude: used,
-    };
-    const light = pickColor(colors, {
-      ...common,
-      background: LIGHT_BG,
-      targetS: spec.targetS ?? TONE.light.s,
-      targetL: spec.targetL ?? TONE.light.l,
+      background: theme === 'light' ? LIGHT_BG : DARK_BG,
+      targetS: spec.targetS ?? TONE[theme].s,
+      targetL: spec.targetL ?? TONE[theme].l,
     });
-    const dark = pickColor(colors, {
-      ...common,
-      background: DARK_BG,
-      targetS: spec.targetS ?? TONE.dark.s,
-      targetL: spec.targetL ?? TONE.dark.l,
-    });
-    // 任一侧挑不到就整个类别跳过（不上色，而不是产出坏值）。
-    if (light === null || dark === null) continue;
+    const light = pick('light');
+    const dark = pick('dark');
+    if (light === null || dark === null) return null;
     const bucket = chosenByHue.get(spec.hue) ?? new Set();
     bucket.add(light.x);
     bucket.add(dark.x);
     chosenByHue.set(spec.hue, bucket);
-    out[key] = {
-      light: light.x,
-      dark: dark.x,
-      lightName: light.n,
-      darkName: dark.n,
-    };
+    usedColors.add(light.x);
+    usedColors.add(dark.x);
+    out[key] = { light: light.x, dark: dark.x, lightName: light.n, darkName: dark.n };
+    return out[key];
+  };
+
+  // 第一遍：严格（只用自己的归属色 + 跨类别不撞车）。
+  for (const [key, spec] of entries) {
+    if (attempt(key, spec, { allowCrossHueReuse: false, requireOwnership: true }) === null) {
+      // 放宽"归属"限制再试一次（有些色库色相分布稀疏，严格归属可能无解）。
+      if (attempt(key, spec, { allowCrossHueReuse: false, requireOwnership: false }) === null) {
+        pending.push([key, spec]);
+      }
+    }
+  }
+
+  // 第二遍：补漏（允许同色相复用，但仍避开任何已用的具体色值）。
+  for (const [key, spec] of pending) {
+    if (attempt(key, spec, { allowCrossHueReuse: true, requireOwnership: false }) !== null) continue;
+    // 最后兜底：连排除都不要了，务必给出一个色（"有颜色"优先于"不撞色"）。
+    const dark = pickColor(colors, {
+      hue: spec.hue,
+      background: DARK_BG,
+      targetS: spec.targetS ?? TONE.dark.s,
+      targetL: spec.targetL ?? TONE.dark.l,
+    });
+    const light = pickColor(colors, {
+      hue: spec.hue,
+      background: LIGHT_BG,
+      targetS: spec.targetS ?? TONE.light.s,
+      targetL: spec.targetL ?? TONE.light.l,
+    });
+    const l = light ?? dark;
+    const d = dark ?? light;
+    if (l === null && d === null) continue;
+    out[key] = { light: l.x, dark: d.x, lightName: l.n, darkName: d.n };
+    usedColors.add(l.x);
+    usedColors.add(d.x);
   }
   return out;
 }
@@ -235,27 +347,23 @@ export function buildPalette(colors, specs) {
 /**
  * 从**同一个红色系色库**里挑出「低/中/高」三个风险等级的颜色。
  *
- * 用户要求「运行命令应该根据命令的危险性等分等级上色，采用红色系」，所以
- * 三级都用红（色相窗口覆盖正红到偏紫的红），靠**明暗台阶**分级。
+ * ## 分级轴是**饱和度**，不是对比度（这一点前后错过两次）
  *
- * ## ⚠️ 为什么不能"各档定一个目标亮度再各自挑最近的"
+ * 直觉上"越危险越醒目"应该等于"对比度越高"。实测**在深色主题下这不成立**：
+ * 深底上高对比度必然来自**亮**色，而传统红里偏亮的都是粉调（低饱和）——
+ * 于是三档会变成 橙红(s85) → 粉(s69) → 浅粉(s68)：对比度确实递增，
+ * 但**"最危险"看起来最淡**，与要表达的语义正好相反。
  *
- * 第一版就是这么写的（给三档分别设 `targetL` 56/64/72，再让 `pickColor` 挑最
- * 接近的）。结果**三档几乎一模一样**（深色主题实测 `#C45A65` / `#C74A4D` /
- * `#D46A6A`），而且顺序还错了：低档对比度 4.34、中档 3.92 —— **中档比低档更暗**，
- * 完全不符合"越危险越醒目"。用户直接指出来："不同档位颜色你说你做了 实际没有差异"。
+ * 所以等级轴改用**饱和度**：低风险最淡（偏粉/砖红）、高风险最浓（正红/朱红）。
+ * 对比度只作为**合法性下限**（标签是 13–14px 文本，取正文门槛 4.5）与上限
+ * （防止近黑丢色相），不再参与排序。
  *
- * 根因是**目标亮度不是单调的对比度**：`pickColor` 按"色调偏差 + 色相偏离"打分，
- * 而排除集（三档互斥）会把某一档挤到离目标很远的色上，单调性就丢了。
+ * ## 三个约束，缺一不可
  *
- * ## 现在的做法：按**对比度分位**取，并强制单调 + 最小可辨距离
- *
- * 1. 先把色库里"对当前主题底色对比度达标"的颜色全部算出来，按对比度排序；
- * 2. 在**可达对比度区间**上取三个分位点（低 30% / 中 55% / 高 85%）当作目标 ——
- *    这样三档天然落在深浅不同的位置，而不是各自撞到同一个极值；
- * 3. 每档挑**对比度最接近目标**且未被占用的色；
- * 4. 最后**校验单调性与最小可辨距离（ΔE）**，不满足就整体放宽重来 ——
- *    宁可换一套色，也不产出"看起来一样"的三档。
+ * 1. **对比度 ∈ [4.5, 9.5]** —— 文本可读，且不会挑到近黑；
+ * 2. **饱和度严格递增** —— 这是"等级感"的来源；
+ * 3. **相邻 ΔE ≥ 9** —— 三档必须能一眼分辨（用户上一轮的原话是
+ *    "你说你做了 实际没有差异"）。
  *
  * @param colors 色库（红色系）。
  * @param options.hueCenter 色相中心（默认 5 度，正红略偏橙）。
@@ -268,48 +376,48 @@ export function buildRedTiers(colors, options = {}) {
   const family = colors.filter((c) => hueDistance(c.h, hueCenter) <= hueWindow);
   const source = family.length >= 8 ? family : colors;
 
-  /** 三个等级的目标分位（在可达对比度区间上的位置）。 */
-  const TIERS = [
-    { key: 'commandLow', q: 0.30 },
-    { key: 'commandMid', q: 0.55 },
-    { key: 'commandHigh', q: 0.85 },
-  ];
-
-  /** 对比度下限（非文本图形，WCAG 1.4.11）与上限（防止近黑/近白丢色相）。 */
-  const CR_MIN = MIN_CONTRAST;
+  /** 文本可读门槛（WCAG 正文 4.5）与色相辨识上限。 */
+  const CR_MIN = TEXT_MIN_CONTRAST;
   const CR_MAX = MAX_CONTRAST;
+
+  /**
+   * 每档的目标饱和度与亮度。
+   *
+   * 饱和度沿 38 → 62 → 86 递增（"越危险越浓"）；亮度只用来在同饱和度里
+   * 微调，让颜色不至于发闷。
+   */
+  const TIERS = [
+    { key: 'commandLow', targetS: 38, targetL: 60 },
+    { key: 'commandMid', targetS: 62, targetL: 56 },
+    { key: 'commandHigh', targetS: 86, targetL: 53 },
+  ];
 
   const out = {};
   for (const theme of ['light', 'dark']) {
     const background = theme === 'light' ? LIGHT_BG : DARK_BG;
-    // 可选色：色相在窗口内、饱和度不至于发灰、对比度在区间内。
     const pool = source
       .map((c) => ({ color: c, cr: contrast(c.x, background) }))
-      .filter((e) => e.cr >= CR_MIN && e.cr <= CR_MAX && e.color.s >= 28)
-      .sort((a, b) => a.cr - b.cr);
+      .filter((e) => e.cr >= CR_MIN && e.cr <= CR_MAX);
     if (pool.length < 3) continue;
 
-    const lo = pool[0].cr;
-    const hi = pool[pool.length - 1].cr;
     const used = new Set();
     const chosen = [];
     for (const tier of TIERS) {
-      const target = lo + tier.q * (hi - lo);
-      // 挑对比度最接近目标、且与已选色有足够色差（ΔE）的候选。
       let best = null;
       for (const entry of pool) {
         if (used.has(entry.color.x)) continue;
-        // 与同主题已选色必须能一眼分辨（ΔE 门槛）。
-        const tooClose = chosen.some((c) => deltaE(c.color.x, entry.color.x) < MIN_TIER_DELTA_E);
-        if (tooClose) continue;
-        const cost = Math.abs(entry.cr - target);
+        // 必须与已选档位一眼可辨，否则"分级"形同虚设。
+        if (chosen.some((c) => deltaE(c.color.x, entry.color.x) < MIN_TIER_DELTA_E)) continue;
+        const cost = Math.abs(entry.color.s - tier.targetS)
+          + (Math.abs(entry.color.l - tier.targetL) * 0.6);
         if (best === null || cost < best.cost) best = { ...entry, cost };
       }
-      // 严格门槛下挑不到就放宽 ΔE 再挑一次（保证三档都有色，而不是留空）。
+      // 严格门槛下挑不到就放宽 ΔE（保证三档都有色，而不是留空）。
       if (best === null) {
         for (const entry of pool) {
           if (used.has(entry.color.x)) continue;
-          const cost = Math.abs(entry.cr - target);
+          const cost = Math.abs(entry.color.s - tier.targetS)
+            + (Math.abs(entry.color.l - tier.targetL) * 0.6);
           if (best === null || cost < best.cost) best = { ...entry, cost };
         }
       }
@@ -318,16 +426,42 @@ export function buildRedTiers(colors, options = {}) {
       chosen.push({ tier, ...best });
     }
     if (chosen.length !== TIERS.length) continue;
-    for (const item of chosen) {
-      const prev = out[item.tier.key];
-      const light = theme === 'light' ? item.color.x : prev?.light;
-      const dark = theme === 'dark' ? item.color.x : prev?.dark;
-      const lightName = theme === 'light' ? item.color.n : prev?.lightName;
-      const darkName = theme === 'dark' ? item.color.n : prev?.darkName;
-      out[item.tier.key] = { light, dark, lightName, darkName };
+
+    // 单调性兜底：万一某档的饱和度没能递增（色库分布异常），按饱和度重排档位，
+    // 保证"越危险越浓"这条语义恒成立。
+    const ordered = [...chosen].sort((a, b) => a.color.s - b.color.s);
+    for (let i = 0; i < TIERS.length; i += 1) {
+      const tier = TIERS[i];
+      const item = ordered[i];
+      const prev = out[tier.key];
+      out[tier.key] = {
+        light: theme === 'light' ? item.color.x : prev?.light,
+        dark: theme === 'dark' ? item.color.x : prev?.dark,
+        lightName: theme === 'light' ? item.color.n : prev?.lightName,
+        darkName: theme === 'dark' ? item.color.n : prev?.darkName,
+      };
     }
   }
   return out;
+}
+
+/**
+ * HSV 饱和度（0–100）。
+ *
+ * 命令分级用**饱和度**做等级轴，测试要按同一口径断言，所以导出这个纯函数 ——
+ * 避免测试自己再算一套（口径不一致会给出假绿）。
+ *
+ * @param hex `#RRGGBB`。
+ * @returns 0–100 的饱和度；输入非法时返回 0。
+ */
+export function hsvSaturation(hex) {
+  const m = /^#([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})$/.exec(hex ?? '');
+  if (m === null) return 0;
+  const [r, g, b] = [m[1], m[2], m[3]].map((h) => parseInt(h, 16) / 255);
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  if (max === 0) return 0;
+  return ((max - min) / max) * 100;
 }
 
 /**
@@ -357,6 +491,15 @@ function toLab(hex) {
   const fz = f(z);
   return [(116 * fy) - 16, 500 * (fx - fy), 200 * (fy - fz)];
 }
+
+/**
+ * 饱和度奖励系数（每 1 点饱和度抵扣多少对比度偏差）。
+ *
+ * 取 0.012：红色系的对比度区间宽度约 4（3.2–9.5），饱和度跨度约 60，
+ * 于是"满饱和"最多能抵扣 0.72 的对比度偏差 —— 足够让同档位内偏向浓色，
+ * 又不足以把三档的对比度台阶压平（台阶本身有 ~1.6 的差距）。
+ */
+export const SATURATION_BONUS = 0.012;
 
 /**
  * 相邻风险档之间的最小可辨色差。

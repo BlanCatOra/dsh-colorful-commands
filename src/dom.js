@@ -22,7 +22,7 @@
  *
  * @module dsh-colorful-commands/dom
  */
-import { classifyAttrs, readAttrs } from './classify.js';
+import { classifyAttrs, hasTitleDetail, readAttrs } from './classify.js';
 import { TITLE_SEPARATOR } from './constants.js';
 import { CAT_ATTR, MARK_ATTR, PART_ATTR, SCOPE_ATTR } from './css.js';
 
@@ -38,6 +38,9 @@ const CANDIDATE_SELECTOR = [
   '[class*="_retryRow"]',
   '[class*="_retrySummary"]',
   '[class*="_retryText"]',
+  // 压缩行同样只有类名可用：<div class="…_compactionRow"><button class="…_compactionButton">
+  '[class*="_compactionRow"]',
+  '[class*="_compactionButton"]',
   // ⚠️ `[data-sample]` **必须在内**：bash 工具行（BashRow）的根元素只有
   // `data-sample="bash"` + `data-variant="bash"`，**没有 `data-tool`**
   // —— 这正是"运行命令"一直不上色的根因（详见 classify.js 的说明）。
@@ -96,13 +99,22 @@ function nearestCandidate(node, maxDepth = 24) {
  * （实测会把颜色画到整列左缘、与靠右的气泡脱节）。
  *
  * @param attrs 属性快照。
+ * @param options.hasDetail 过程组标题里是否带详情（见 `hasTitleDetail`）。
  * @returns 作用域名。
  */
-function scopeFor(attrs) {
+function scopeFor(attrs, options = {}) {
   if (attrs['data-slot'] !== undefined) return 'tint';
   // 过程组标题是一个 `<button>`，不是 DisclosureRow，没有折叠表头结构。
-  // 用 `title` 作用域：染它自己的 svg + **标签**（详情由切分隔开，见 splitTitleLabel）。
-  if (attrs['data-process-activity'] !== undefined) return 'title';
+  //
+  // ⚠️ 分成两个作用域，**不能**只用一个 + CSS 的 `:not(:has())` 兜底：
+  // 兜底规则会在"切分被 React 重渲染冲掉"的那一帧重新匹配上整段标题，
+  // 于是正文被整段染色、下一帧再切回来 —— 视觉上就是**闪烁**
+  // （用户实测反馈："正文的上色是闪烁的"）。
+  // 拆开后，"有详情"的元素只认 `[data-cc-part]`：切分短暂失效时表现为
+  // "标签那一瞬间没颜色"，绝不会把正文染色。
+  if (attrs['data-process-activity'] !== undefined) {
+    return options.hasDetail === true ? 'title-part' : 'title';
+  }
   if (attrs['data-tool'] !== undefined) return 'header';
   if (attrs['data-variant'] === 'think') return 'header';
   // bash 工具行（BashRow）：根元素只有 `data-sample` + `data-variant="bash"`。
@@ -176,36 +188,38 @@ function dangerText(element) {
 function splitTitleLabel(element) {
   try {
     if (typeof element.querySelectorAll !== 'function') return false;
-    const label = element.querySelector('[class*="_label"]');
-    if (label === null) return false;
-    // 已经切过：不再重复包裹。
-    if (typeof label.querySelector === 'function' && label.querySelector(`[${PART_ATTR}]`) !== null) {
-      return true;
-    }
-    // 找出**所有**承载标题的文本节点（流式期间 TextShimmer 会渲染两份）。
+    // ⚠️ 遍历**所有** `_label`，不能只看第一个：流式期间 TextShimmer 会渲染两份
+    // 标题（正常一份 + aria-hidden 的扫光副本），只看第一个会让动画副本整段着色。
+    const labels = element.querySelectorAll('[class*="_label"]');
+    if (labels.length === 0) return false;
     const doc = element.ownerDocument;
     if (doc === null || doc === undefined || typeof doc.createTreeWalker !== 'function') return false;
-    const walker = doc.createTreeWalker(label, 4 /* NodeFilter.SHOW_TEXT */);
-    const nodes = [];
-    let node;
-    while ((node = walker.nextNode()) !== null) nodes.push(node);
-    if (nodes.length === 0) return false;
 
     let split = false;
-    for (const textNode of nodes) {
-      const text = textNode.nodeValue;
-      if (typeof text !== 'string' || text === '') continue;
-      const at = text.indexOf(TITLE_SEPARATOR);
-      if (at === -1) continue;
-      const parent = textNode.parentNode;
-      if (parent === null || parent === undefined) continue;
-      // 用 span 包住标签，详情文字原样留在同一个父节点里。
-      const wrapper = doc.createElement('span');
-      wrapper.setAttribute(PART_ATTR, 'label');
-      wrapper.textContent = text.slice(0, at);
-      textNode.nodeValue = text.slice(at);
-      parent.insertBefore(wrapper, textNode);
-      split = true;
+    for (const label of labels) {
+      const walker = doc.createTreeWalker(label, 4 /* NodeFilter.SHOW_TEXT */);
+      const nodes = [];
+      let node;
+      while ((node = walker.nextNode()) !== null) nodes.push(node);
+      for (const textNode of nodes) {
+        const text = textNode.nodeValue;
+        if (typeof text !== 'string' || text === '') continue;
+        const at = text.indexOf(TITLE_SEPARATOR);
+        // ⚠️ 必须 `> 0`，不能 `!== -1`：
+        //  - `at === 0` 说明分隔符在最前面（空标签），切出来是个空 span；
+        //  - 更重要的是**幂等**：切分后详情那半段以分隔符开头，如果这里允许
+        //    `at === 0`，每次扫描都会在它前面再插一个空 span，无限堆积。
+        if (at <= 0) continue;
+        const parent = textNode.parentNode;
+        if (parent === null || parent === undefined) continue;
+        // 用 span 包住标签，详情文字原样留在同一个父节点里。
+        const wrapper = doc.createElement('span');
+        wrapper.setAttribute(PART_ATTR, 'label');
+        wrapper.textContent = text.slice(0, at);
+        textNode.nodeValue = text.slice(at);
+        parent.insertBefore(wrapper, textNode);
+        split = true;
+      }
     }
     return split;
   } catch {
@@ -258,7 +272,7 @@ export function tagElement(element) {
     // 过程组标题：把「标签」切出来，才能只染标签、不染详情（见 splitTitleLabel）。
     if (attrs['data-process-activity'] !== undefined) splitTitleLabel(element);
     element.setAttribute(CAT_ATTR, category);
-    element.setAttribute(SCOPE_ATTR, scopeFor(attrs));
+    element.setAttribute(SCOPE_ATTR, scopeFor(attrs, { hasDetail: hasTitleDetail(text) }));
     element.setAttribute(MARK_ATTR, '');
     return category;
   } catch {
@@ -383,6 +397,26 @@ export function startObserver(options = {}) {
         for (const record of records) {
           if (record.type === 'childList') {
             for (const node of record.addedNodes) pending.push(node);
+            // ⚠️ **必须也看 removedNodes**：React 重渲染标题时会重设文本内容，
+            // 把运行时插入的 `[data-cc-part="label"]` 一起移除。只处理 addedNodes
+            // 就永远等不到"重新切分"的触发，于是标签时有时无、正文时而被整段染色
+            // —— 用户看到的就是"上色闪烁"。
+            // 被移除的是自己的标签段时，把它的宿主元素重新入队（交给 nearestCandidate
+            // 上溯到带 `data-process-activity` 的按钮）。
+            for (const node of record.removedNodes) {
+              let mine = false;
+              try {
+                if (node.nodeType === 1) {
+                  mine = typeof node.matches === 'function'
+                    && node.matches(`[${PART_ATTR}]`);
+                }
+              } catch {
+                mine = false;
+              }
+              if (!mine) continue;
+              const owner = nearestCandidate(record.target);
+              if (owner !== null) pending.push(owner);
+            }
             continue;
           }
           // ⚠️ `characterData` 必须观察：过程组标题的「标签 · 分析正文」是**文本

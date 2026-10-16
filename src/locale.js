@@ -54,6 +54,7 @@ const zh = {
   categorySearch: '搜索',
   categoryWeb: '网络请求',
   categoryRetry: '重试模型请求',
+  categoryCompaction: '上下文压缩',
   categoryOther: '其他工具',
 
   permissionsTitle: '权限等级',
@@ -119,6 +120,7 @@ const en = {
   categorySearch: 'Search',
   categoryWeb: 'Web requests',
   categoryRetry: 'Model request retry',
+  categoryCompaction: 'Context compaction',
   categoryOther: 'Other tools',
 
   permissionsTitle: 'Permission levels',
@@ -149,6 +151,7 @@ export const CATEGORY_KEYS = {
   search: 'categorySearch',
   web: 'categoryWeb',
   retry: 'categoryRetry',
+  compaction: 'categoryCompaction',
   other: 'categoryOther',
   'ctl-permission': 'categoryCtlPermission',
   'ctl-plan': 'categoryCtlPlan',
