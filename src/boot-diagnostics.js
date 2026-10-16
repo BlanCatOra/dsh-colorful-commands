@@ -33,7 +33,7 @@ export const BOOT_REPORT_KEY = 'dsh.colorful-commands.boot';
  * @param kind 全局名。
  * @returns 可用的 storage，或 undefined。
  */
-function safeStorage(kind) {
+export function safeStorage(kind) {
   try {
     const store = globalThis[kind];
     if (store === undefined || store === null) return undefined;

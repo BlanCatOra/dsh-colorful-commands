@@ -134,6 +134,203 @@ const ACTIVITY_CATEGORY = {
 const SLOT_CATEGORY = {
   'conversation.input.permission': 'ctl-permission',
   'conversation.input.plan': 'ctl-plan',
+  // ⚠️ **`conversation.chat.turnTail` 是消息尾部**（「已完成 · 用时 xxx」＋用量＋分支），
+  //    真机实测钩子（2026-10-17 CDP 读出的真实 DOM）：
+  //      DIV{data-turn-tail="22" data-actions-reveal="hover" class="N1-_sG_root"}
+  //        BUTTON{aria-label="在新对话中分支"}
+  //    它是插槽锚点，所以走 SLOT_CATEGORY；具体染哪一块由 scopeFor 决定。
+  'conversation.chat.turnTail': 'meta',
+};
+
+/**
+ * 从「上下文已用 xx%」的 aria-label 里读百分比并分档。
+ *
+ * ## 为什么读 aria-label 而不是文本
+ *
+ * 真机实测（2026-10-17）：进度圈那个按钮是
+ *
+ *     BUTTON{class="_zgeDa_trigger" aria-label="上下文已用 29%" aria-haspopup="dialog"}
+ *
+ * 百分比**直接写在 aria-label 里**，而且是纯数字 + `%`，不需要解析本地化文案的
+ * 前后缀（中英文前缀不同，但数字与 `%` 相同）。这比抓可见文本稳得多 ——
+ * 可见文本在 tooltip 未打开时甚至不存在。
+ *
+ * 分档阈值取「用户要求（35 以下绿）」与「DSH 实际自动压缩阈值 68%」的折中：
+ *
+ * | 档 | 区间 | 语义 |
+ * |---|---|---|
+ * | `usageLow` | `< 35%` | 宽裕（用户指定绿色系） |
+ * | `usageMid` | `35% – 49%` | 过半前的提醒 |
+ * | `usageHigh` | `50% – 67%` | 接近自动压缩阈值（AGENTS.md 要求 50/60 提醒） |
+ * | `usageCritical` | `>= 68%` | 越过 DSH 自动压缩阈值（compaction-basic 0.68） |
+ *
+ * @param text 元素的 aria-label 或可见文本。
+ * @returns 类别 id，或 null（读不到百分比时不着色）。
+ */
+export function usageCategory(text) {
+  if (typeof text !== 'string' || text === '') return null;
+  const m = /(\d{1,3})\s*%/.exec(text);
+  if (m === null) return null;
+  const value = Number(m[1]);
+  if (!Number.isFinite(value) || value < 0 || value > 100) return null;
+  if (value < 35) return 'usageLow';
+  if (value < 50) return 'usageMid';
+  if (value < 68) return 'usageHigh';
+  return 'usageCritical';
+}
+
+/**
+ * 消息尾部（turn-tail）里，哪些子块应该被染色。
+ *
+ * 真机结构（2026-10-17 CDP 实测）：
+ *
+ * ```html
+ * <div class="N1-_sG_root" data-turn-tail="22" data-actions-reveal="hover">
+ *   <div class="N1-_sG_actions" data-clock="end">
+ *     <button class="_4sesoa_action" aria-label="在新对话中分支">…</button>
+ *   </div>
+ * </div>
+ * ```
+ *
+ * ⚠️ **`data-actions-reveal="hover"` 是内核自己标的"悬浮才显现"**
+ * （用户 2026-10-17 指出：「只有最后一条的控件会自动显示，过往消息的控件需要
+ * 鼠标悬浮到对应位置才会显现」）。用户选择「悬浮出现时就上色」（会话中确认的
+ * **3a** 方案），所以这里**不做常显/悬浮的区分** —— 元素存在就染，悬浮出现时
+ * 颜色跟着出现，per-element 判定天然覆盖两种情形。
+ */
+
+/**
+ * 是否为消息尾部（turn-tail）里的元素。
+ *
+ * ## 真机结构（2026-10-17 从运行中的应用读出的**真实** DOM）
+ *
+ * ```html
+ * <div class="N1-_sG_root" data-turn-tail="22" data-actions-reveal="hover">
+ *   <div class="N1-_sG_actions" data-clock="end">
+ *     <button class="_4sesoa_action" aria-label="在新对话中分支">…</button>
+ *   </div>
+ * </div>
+ * ```
+ *
+ * 以及 composer dock 里的进度圈：
+ *
+ * ```html
+ * <button class="_zgeDa_trigger" aria-label="上下文已用 29%" aria-haspopup="dialog">
+ *   <span class="_zgeDa_root">…svg 圆环…</span>
+ * </button>
+ * <div class="_5UfNCq_dock" data-composer-dock="true">…</div>
+ * ```
+ *
+ * ⚠️ **`data-turn-tail` 是最理想的钩子**：它是内核自己给的语义化属性
+ * （`turnTailDefinition.kind === "turn-tail"`），且带 turn 编号。
+ * 但它挂在**外层容器**上，内部还套着「已完成/用时」文本与按钮 —— 所以
+ * 只按它下面的 `_actions` 子块上色，不碰整块。
+ *
+ * ⚠️ `data-composer-dock` 同理：它是 composer 底部条，里面既有**要上色**的
+ * 进度圈，也有**明确不要上色**的 tokens 数字（用户要求），所以只认
+ * `aria-label` 里带百分比的进度圈。
+ *
+ * @param attrs 属性快照。
+ * @returns 是否为尾部/用量区元素。
+ */
+function isEmptyActionsRow(attrs) {
+  const a = attrs ?? {};
+  if (a['data-turn-tail'] !== undefined) return true;
+  if (a['data-composer-dock'] !== undefined) return true;
+  return false;
+}
+
+/**
+ * 是否为消息尾部的「已完成 · 用时 xxx」状态元素。
+ *
+ * ## 真机结构（2026-10-17 从运行中的应用读出的真实 DOM）
+ *
+ * ```html
+ * <span class="TrFNTq_visuallyHidden" role="status">已完成</span>
+ * ```
+ *
+ * ⚠️ 内核把"已完成"放在一个**视觉隐藏**的 span 里（`_visuallyHidden`，给屏幕
+ * 阅读器播报用），真正的可见文案由相邻元素渲染。用户要求这行用**成功色
+ * （绿色系）**，且"不要太鲜艳抢眼"。
+ *
+ * ⚠️ **判据必须跨语言**：不能匹配 `已完成` 这个中文串 —— 切到英文界面就失效。
+ * 这里用 `role="status"` + 类名含 `visuallyHidden` 的组合：
+ *  - 重试行也有 `role="status"`，但它是 `_retryText`，**不含** `visuallyHidden`，
+ *    两者由此区分开（重试行有自己独立的 `retry` 类别）。
+ *
+ * @param attrs 属性快照。
+ * @returns 是否为尾部"已完成"状态元素。
+ */
+function isTurnTailStatus(attrs) {
+  const cls = attrs?.class;
+  if (typeof cls !== 'string' || !cls.includes('visuallyHidden')) return false;
+  return attrs?.['role'] === 'status';
+}
+
+/**
+ * 判断过程组标题是不是**聚合摘要**（同时包含多种活动）。
+ *
+ * ## 为什么必须单独判（这是"太混乱了"的根因）
+ *
+ * 用户 2026-10-17 截图里的三行，是**同一件事**：
+ *
+ * | 标题 | `data-process-activity` | 我们染成的色 |
+ * |---|---|---|
+ * | 已读取文件，修改了文件，执行了命令 | `read` | 蓝 |
+ * | 修改了文件，执行了命令，已读取文件 | `write` | 绿 |
+ * | 执行了命令，修改了文件，已读取文件 | `commands` | 玫红 |
+ *
+ * 内核把这些活动**拼成一个摘要标题**，而 `data-process-activity` **只保留其中一个**
+ * （哪个排在前就留哪个）。于是颜色完全取决于排列顺序 —— 在用户看来就是随机配色，
+ * 原话"太混乱了"。
+ *
+ * 聚合摘要**没有单一语义**，所以判成中性的 `summary` 类别（低饱和一级灰蓝），
+ * 与内容行的彩色形成层级：单个活动保持语义色，混合活动统一弱化。
+ *
+ * 判定方式：标题里出现 `"、"`（内核拼接多个活动用的分隔符）或 `"，"`，
+ * 且去重后仍有多个不同的活动名 —— 单纯一个活动名（"执行了命令"）不算聚合。
+ *
+ * @param text 过程组标题的完整文本。
+ * @returns 是否为聚合摘要。
+ */
+export function isAggregateTitle(text) {
+  if (typeof text !== 'string' || text === '') return false;
+  // 聚合标题由内核用「、」连接多个活动名；单个活动名不含分隔符。
+  if (!text.includes('、') && !text.includes('，')) return false;
+  const found = new Set();
+  for (const [label, category] of Object.entries(ACTIVITY_LABELS)) {
+    if (text.includes(label)) found.add(category);
+  }
+  return found.size > 1;
+}
+
+/**
+ * 活动名（中文 label）→ 归一化语义。
+ *
+ * ⚠️ 与 `ACTIVITY_CATEGORY`（`data-process-activity` 的机器值 → 类别）不同：
+ * 这张表是**中文文案 → 语义桶**，只用于 `isAggregateTitle` 判断"标题里提到了
+ * 几种不同的活动"。取值来自内核 `ui-chat` 的 `message.stepProcess.*` 文案。
+ */
+const ACTIVITY_LABELS = {
+  已读取文件: 'read',
+  读取文件: 'read',
+  修改了文件: 'write',
+  创建了文件: 'write',
+  写入了文件: 'write',
+  执行了命令: 'command',
+  运行命令: 'command',
+  执行命令: 'command',
+  已完成分析: 'thinking',
+  正在分析: 'thinking',
+  分析请求: 'thinking',
+  已搜索: 'search',
+  搜索: 'search',
+  已获取网页: 'web',
+  网络请求: 'web',
+  询问用户: 'question',
+  询问: 'question',
+  派遣子代理: 'subagent',
+  子代理: 'subagent',
 };
 
 /**
@@ -237,6 +434,21 @@ export function permissionLevel(text) {
 export function classifyAttrs(attrs, options = {}) {
   const a = attrs ?? {};
 
+  // 0a. 消息尾部（turn-tail）里的用量/分支块 —— 只有类名与 aria-label 可用。
+  //     必须**排在最前**：`N1-_sG_actions` 这类容器不带任何语义化 data-*，
+  //     而且它的祖先恰好带 `data-chat-flow-kind`（会被后面的分支误吞）。
+  //     ⚠️ 先判进度圈（它读 aria-label 分档），再判通用的 meta 容器。
+  // 0a-0. 消息尾部的「已完成 · 用时 xxx」——必须排在 turn-tail 容器之前判，
+  //       因为它是**更具体**的形状（容器是它的祖先，两者都会被扫到）。
+  if (isTurnTailStatus(a)) return 'done';
+
+  if (isEmptyActionsRow(a)) {
+    const usage = usageCategory(options.usageText);
+    if (usage !== null) return usage;
+    if (isTurnTailStatus(a)) return 'done';
+    return 'meta';
+  }
+
   // 0. 重试行 / 压缩行：它们没有可用的语义化 data-* 属性，只能靠类名后缀
   //    或标题字面量识别。
   if (isRetryRow(a)) return 'retry';
@@ -251,6 +463,9 @@ export function classifyAttrs(attrs, options = {}) {
     const base = SLOT_CATEGORY[slot];
     // 权限选择按**当前等级**细分 —— 用户明确要求不同等级不同色。
     if (base === 'ctl-permission') return permissionLevel(options.text) ?? base;
+    // ⚠️ `conversation.chat.turnTail` 这个槽锚点包着**整条尾部**（含「已完成 ·
+    //    用时」那行）。它是一个 `display: contents` 的包裹层，直接染它会命中
+    //    太多东西，所以**只染它内部的用量/分支按钮**（由 scopeFor 决定作用域）。
     return base;
   }
 
@@ -258,6 +473,19 @@ export function classifyAttrs(attrs, options = {}) {
   //    只有 data-process-activity，所以必须单独判，否则整类漏掉不着色。
   const activity = a['data-process-activity'];
   if (typeof activity === 'string' && activity !== '') {
+    // ⚠️⚠️ **聚合标题必须走中性色 —— 这是"太混乱了"的根因。**
+    //
+    //    真机实测（用户 2026-10-17 截图）：同一个过程组里同时有
+    //    read / write / commands 三种活动时，内核把它们**拼成一个摘要标题**，
+    //    而 `data-process-activity` **只保留其中一个**（哪个在前就留哪个）：
+    //
+    //        「已读取文件，修改了文件，执行了命令」 → read   → 蓝
+    //        「修改了文件，执行了命令，已读取文件」 → write  → 绿
+    //        「执行了命令，修改了文件，已读取文件」 → commands → 玫红
+    //
+    //    三行是**同一件事**，颜色却取决于排列顺序 —— 视觉上完全是随机的，
+    //    用户的原话就是"太混乱了"。聚合摘要没有单一语义，就不该跟随某一个活动。
+    if (isAggregateTitle(options.text)) return 'summary';
     const abase = ACTIVITY_CATEGORY[activity] ?? 'other';
     // ⚠️ `commands` / `tools` 是**聚合**活动（"执行了命令"），先归 `command`，
     // 再按标题文本细分风险 —— 不细分会让整类拿不到颜色（调色板里没有 `command`）。
@@ -282,7 +510,12 @@ export function classifyAttrs(attrs, options = {}) {
   //    修法：把 `data-sample` 当作与 `data-variant` 等价的钩子，并按**具体工具名
   //    优先、其次变体**取值。命令类再由 `commandCategory()` 按风险细分。
   const tool = a['data-tool'];
-  const variant = a['data-variant'];
+  // ⚠️ `data-sample` 必须与 `data-variant` **等价看待**，不能只认后者：
+  //    bash 工具行（BashRow）的根元素是 `data-sample="bash"` + `data-variant="bash"`，
+  //    两个都有；但只带 `data-sample` 的形状也真实存在（`data-variant` 是宿主
+  //    后来才加的）。只认 `data-variant` 会让这种行直接落到 `null` → **完全不上色**。
+  //    这里按"具体工具名 > 变体 > sample"取值，与 `dom.js` 的 dangerText 判定一致。
+  const variant = a['data-variant'] ?? a['data-sample'];
   const base = typeof tool === 'string' && tool !== ''
     ? TOOL_CATEGORY[tool] ?? 'other'
     : typeof variant === 'string' && Object.hasOwn(VARIANT_CATEGORY, variant)
@@ -359,6 +592,16 @@ export function readAttrs(element) {
     'data-variant',
     'data-sample',
     'data-kind',
+    // ── 2026-10-17 新增：消息尾部（turn-tail）与 composer 底部条 ──
+    // 真机实测这两个是内核自带的语义化属性，比类名稳。
+    // ⚠️ `aria-label` 也要读：进度圈的百分比**只写在 aria-label 里**
+    //    （`aria-label="上下文已用 29%"`），可见文本在 tooltip 关闭时不存在。
+    'data-turn-tail',
+    'data-composer-dock',
+    'aria-label',
+    // ⚠️ `role` 也要读：消息尾部的「已完成」是 `role="status"` 的**视觉隐藏**
+    //    span（给屏幕阅读器播报用），这是它唯一跨语言可靠的判据。
+    'role',
   ];
   const attrs = {};
   for (const name of names) {

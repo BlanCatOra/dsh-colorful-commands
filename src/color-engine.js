@@ -205,8 +205,16 @@ export function pickColor(colors, options) {
  * @param specs 语义 → 规格。
  * @returns `{ [key]: { light, dark, lightName, darkName } }`。
  */
-export function buildPalette(colors, specs) {
+export function buildPalette(colors, specs, options = {}) {
   const out = {};
+  /**
+   * 外部已占用的色值（可选）。
+   *
+   * ⚠️ 用途：**状态类**（消息尾部/输入框）与**内容类**（消息体内）虽然分两次
+   * 选色（见 palettes.js 的 STATUS_SEMANTICS 说明），但仍要保证"状态色"不撞
+   * "内容色"。把这些已用色并进 `usedColors` 即可 —— 组内去重照旧生效。
+   */
+  const preUsed = options.exclude ?? new Set();
   /**
    * 每个色相挑中的色值（同色相复用，跨色相才互斥）。
    *
@@ -216,7 +224,7 @@ export function buildPalette(colors, specs) {
    */
   const chosenByHue = new Map();
   /** 所有已被任何类别占用的具体色值（补漏时仍然要避开）。 */
-  const usedColors = new Set();
+  const usedColors = new Set(preUsed);
   /** 第一遍没挑到的类别，留到第二遍补漏。 */
   const pending = [];
 

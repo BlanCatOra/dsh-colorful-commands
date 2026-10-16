@@ -818,3 +818,68 @@ test('压缩进行中：别的斜杠命令不得被误判成 compression', () =>
   assert.equal(tagElement(root), 'other', '通用命令卡片不得被误判为 compaction');
   assert.equal(root.getAttribute(SCOPE_ATTR), 'header', '普通命令卡片仍用 header（不染结果详情）');
 });
+
+test('bash 行：命令原文还没读到时**不得冻结**，读到后必须纠正档位', () => {
+  // 这是「命令的三个颜色层级没有实现」的回归守卫。
+  //
+  // 真机证据（用户 F12 截图）：137 个元素分类全对，唯独**没有一条** commandMid /
+  // commandHigh。根因不是分类逻辑，而是**命令行首次进 DOM 时还在运行中**：
+  // 那一刻 React fiber 上的 `block.call.argsRaw` 尚未写入，读命令返回 null，
+  // 于是退回可见文本（模型的自然语言描述，如 "List current slot registrations"），
+  // 描述里没有危险词 → 判成 commandLow → 立刻被 data-cc-mark **永久冻结**。
+  // 等命令真正落到 fiber 上时，早已走"幂等跳过"分支，再也不会重判。
+  const doc = makeFakeDoc();
+
+  // 假 bash 行：根元素带 data-sample/data-variant，可见文本是**描述**。
+  const root = doc.createElement('div');
+  root.setAttribute('data-sample', 'bash');
+  root.setAttribute('data-variant', 'bash');
+  const row = doc.createElement('div');
+  row.setAttribute('data-disclosure-row', '');
+  row.textContent = 'Check plugin profile bundle';
+  root.appendChild(row);
+
+  // 第一轮：fiber 里还没有命令（模拟流式进行中）→ 只能按描述判成 low。
+  assert.equal(tagElement(root), 'commandLow', '进行中：只能按描述判，先给 low');
+
+  // 关键断言：**不得打 mark**。打了就会被永久冻结，后面再也不会重判。
+  assert.equal(
+    root.getAttribute(MARK_ATTR),
+    null,
+    '命令原文未读到的 bash 行绝不能打 mark —— 打了就永远冻结在 commandLow',
+  );
+
+  // 第二轮：命令原文到位（模拟 React 把 argsRaw 写进 fiber）。
+  const raw = JSON.stringify({ command: 'dd if=/dev/zero of=/tmp/x.img bs=1k count=4' });
+  root.__reactFiber$test = { memoizedProps: { block: { call: { argsRaw: raw } } }, return: null };
+
+  assert.equal(tagElement(root), 'commandHigh', '命令到位后必须重判为高危档');
+  assert.equal(root.getAttribute(MARK_ATTR), '', '读到命令后照常打 mark（此后不再重判）');
+});
+
+test('bash 行：命令已读到的那一轮就应该直接打 mark（不做无谓的重扫）', () => {
+  const doc = makeFakeDoc();
+  const root = doc.createElement('div');
+  root.setAttribute('data-sample', 'bash');
+  const row = doc.createElement('div');
+  row.textContent = 'Create image';
+  root.appendChild(row);
+
+  const raw = JSON.stringify({ command: 'dd if=/dev/zero of=/tmp/x.img bs=1k count=4' });
+  root.__reactFiber$test = { memoizedProps: { block: { call: { argsRaw: raw } } }, return: null };
+
+  assert.equal(tagElement(root), 'commandHigh');
+  assert.equal(root.getAttribute(MARK_ATTR), '', '读到命令时必须打 mark，避免每帧重扫');
+});
+
+test('bash 行：低危命令读不到 fiber 时也必须保持 low（不能误升档）', () => {
+  const doc = makeFakeDoc();
+  const root = doc.createElement('div');
+  root.setAttribute('data-sample', 'bash');
+  const row = doc.createElement('div');
+  row.textContent = 'List files';
+  root.appendChild(row);
+
+  assert.equal(tagElement(root), 'commandLow', '没有 fiber 时必须保守判 low');
+  assert.equal(root.getAttribute(MARK_ATTR), null, '仍未读到命令 → 不打 mark');
+});

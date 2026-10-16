@@ -213,6 +213,22 @@ test('分类表覆盖全部可配置类别（防止加了类别却忘了映射�
     // `retry` / `compaction` 只由 CSS Module 类名后缀识别（内核没给语义化属性）。
     classifyAttrs({ class: 'Sixlwa_retryRow' }),
     classifyAttrs({ class: 'Sixlwa_compactionRow' }),
+    // `summary`（**聚合**过程组标题）：同一组里含多种活动。用户 2026-10-17
+    // 反馈"太混乱了" —— 同件事因活动排列顺序不同而被染成蓝/绿/玫红。
+    classifyAttrs({ 'data-process-activity': 'read' },
+      { text: '已读取文件，修改了文件，执行了命令' }),
+    // `done` / `meta`：消息尾部（turn-tail）与 composer 底部条，
+    // 真机钩子 `data-turn-tail` / `data-composer-dock`（2026-10-17 实测）。
+    classifyAttrs({ 'data-turn-tail': '22' }),
+    // 「已完成」：`role="status"` 的视觉隐藏 span（真机实测结构）。
+    classifyAttrs({ class: 'TrFNTq_visuallyHidden', role: 'status' }),
+    classifyAttrs({ 'data-composer-dock': 'true' }),
+    // 上下文进度圈四档：百分比**只写在 aria-label 里**（真机
+    // `aria-label="上下文已用 29%"`）。四个区间各取一个真实值。
+    classifyAttrs({ 'data-composer-dock': 'true' }, { usageText: '上下文已用 20%' }),
+    classifyAttrs({ 'data-composer-dock': 'true' }, { usageText: '上下文已用 40%' }),
+    classifyAttrs({ 'data-composer-dock': 'true' }, { usageText: '上下文已用 60%' }),
+    classifyAttrs({ 'data-composer-dock': 'true' }, { usageText: '上下文已用 70%' }),
   ]);
   for (const category of ALL_CATEGORIES) {
     assert.ok(mapped.has(category), `类别 ${category} 没有任何映射能产生它`);
@@ -634,4 +650,86 @@ test('others 通用命令卡片：只有标题是 compact 时才算压缩', () =
   // 没有 element / querySelector 时必须安全退回，不能抛错。
   assert.equal(classifyAttrs({ 'data-variant': 'others' }, { text: 'x' }), 'other');
   assert.equal(classifyAttrs({ 'data-variant': 'others' }, { text: 'x', element: {} }), 'other');
+});
+
+test('聚合过程组标题必须走中性 summary，不得跟随单一活动变色', () => {
+  // 回归守卫：用户 2026-10-17 反馈"太混乱了"。
+  //
+  // 内核把同一过程组里的多种活动**拼成一个摘要标题**，而 data-process-activity
+  // **只保留其中一个**（哪个排在前就留哪个）。于是同一件事会因为排列顺序不同
+  // 被染成三种颜色 —— 实测截图：
+  //   已读取文件，修改了文件，执行了命令  → read     → 蓝
+  //   修改了文件，执行了命令，已读取文件  → write    → 绿
+  //   执行了命令，修改了文件，已读取文件  → commands → 玫红
+  //
+  // 聚合摘要没有单一语义，必须落到中性的 summary。
+  const variants = [
+    ['已读取文件，修改了文件，执行了命令', 'read'],
+    ['修改了文件，执行了命令，已读取文件', 'write'],
+    ['执行了命令，修改了文件，已读取文件', 'commands'],
+  ];
+  for (const [text, activity] of variants) {
+    assert.equal(
+      classifyAttrs({ 'data-process-activity': activity }, { text }),
+      'summary',
+      `聚合标题「${text}」必须走 summary，而不是跟随 ${activity} 变色`,
+    );
+  }
+});
+
+test('单一活动的过程组标题仍走各自的语义色（不能被 summary 吞掉）', () => {
+  // 防止"修聚合"修过头：单个活动必须保留语义色，否则 read/write 全变灰。
+  assert.equal(classifyAttrs({ 'data-process-activity': 'read' }, { text: '已读取文件' }), 'read');
+  assert.equal(classifyAttrs({ 'data-process-activity': 'write' }, { text: '修改了文件' }), 'write');
+  assert.equal(classifyAttrs({ 'data-process-activity': 'thinking' }, { text: '已完成分析' }), 'thinking');
+});
+
+test('上下文进度圈四档：饱和度必须严格递增（越危险越浓）', () => {
+  // 用户要求"35 以下绿色系，自己分级"，且反复强调"不要太鲜艳抢眼"。
+  // 第一版只给了 maxSaturation 上限、没有显式 targetS，结果**深色主题下**
+  // critical 挑到 `#D9A594`（饱和 32），比 mid 的 `#C3B787` 还淡 ——
+  // 危险档视觉上反而最弱，语义整个反了。这条测试守住单调性。
+  const tiers = ['usageLow', 'usageMid', 'usageHigh', 'usageCritical'];
+  for (const preset of ['chinese', 'japanese', 'macaron']) {
+    const colors = presetColors(preset);
+    let prevLight = -1;
+    let prevDark = -1;
+    for (const key of tiers) {
+      const pair = colors[key];
+      assert.ok(pair !== undefined, `${preset}: 缺少 ${key}`);
+      const sl = hsvSaturation(pair.light);
+      const sd = hsvSaturation(pair.dark);
+      assert.ok(sl > prevLight, `${preset}/${key}: 浅色饱和度必须大于上一档（${sl} <= ${prevLight}）`);
+      assert.ok(sd > prevDark, `${preset}/${key}: 深色饱和度必须大于上一档（${sd} <= ${prevDark}）`);
+      prevLight = sl;
+      prevDark = sd;
+    }
+  }
+});
+
+test('状态类颜色在三套预设下都必须与内容类互不撞色', () => {
+  // 状态类（尾部/输入框）与内容类（消息体内）**分开选色**，但这不代表可以撞。
+  // 实测踩过：把状态类并进内容区色库选色，在 japanese/macaron（色库仅 58/34 色）
+  // 下必然挑不到唯一色，出现 `done vs write`、`usageMid vs retry` 撞色，
+  // 甚至有类别完全无解（`done 缺失`）。改固定色值后才真正解决。
+  const contentKeys = ['thinking', 'read', 'write', 'search', 'web', 'retry',
+    'compaction', 'other', 'commandLow', 'commandMid', 'commandHigh'];
+  const statusKeys = ['summary', 'done', 'meta', 'usageLow', 'usageMid', 'usageHigh', 'usageCritical'];
+  for (const preset of ['chinese', 'japanese', 'macaron']) {
+    const colors = presetColors(preset);
+    const seen = new Map();
+    for (const key of [...contentKeys, ...statusKeys]) {
+      const pair = colors[key];
+      assert.ok(pair !== undefined, `${preset}: 缺少类别 ${key}`);
+      for (const theme of ['light', 'dark']) {
+        const hex = pair[theme];
+        const owner = seen.get(`${theme}:${hex}`);
+        assert.ok(
+          owner === undefined || owner === key,
+          `${preset}/${theme}: ${key} 与 ${owner} 撞成同一个色 ${hex}`,
+        );
+        seen.set(`${theme}:${hex}`, key);
+      }
+    }
+  }
 });

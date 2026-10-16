@@ -186,6 +186,18 @@ function categoryBranch(category, color, prefix = '') {
   const plain = `${p}${sel}[${SCOPE_ATTR}="plain"]`;
 
   /**
+   * 消息尾部（turn-tail）的用量/分支按钮作用域。
+   *
+   * 真机结构（2026-10-17 实测）：
+   *   `DIV[data-turn-tail]` → `DIV._actions` → `BUTTON[aria-label="在新对话中分支"]`
+   *
+   * ⚠️ 与 `tint` 的区别：`tint` 也匹配 button/a，但它同时会被 `data-slot`
+   * 包裹层命中（`display: contents`），语义是"**控件文字**整体染"。
+   * turn-tail 里只有按钮该染、正文不该染，所以单列一个作用域。
+   */
+  const actions = `${p}${sel}[${SCOPE_ATTR}="actions"]`;
+
+  /**
    * 标题选择器。
    *
    * DSH 用 CSS Module，类名形如 `<构建哈希>_<原类名>`（实测 `Ph6Lgq_title`、
@@ -241,6 +253,23 @@ function categoryBranch(category, color, prefix = '') {
     //      由 `_compactionButton` 整片覆盖，不受这两条影响。）
     `${plain} svg{color:${color}}`,
     `${plain} :is([class*="_retryText"],[class*="_compactionButton"],[class*="_title"],[class*="_summary"],summary){color:${color}}`,
+
+    // ⑥ 消息尾部（turn-tail）的用量/分支按钮。
+    //
+    //    真机结构（2026-10-17 从运行中的应用读出的真实 DOM）：
+    //      DIV[data-turn-tail="22"][data-actions-reveal="hover"]
+    //        DIV._actions[data-clock="end"]
+    //          BUTTON[aria-label="在新对话中分支"]
+    //
+    //    用户要求：底部用量信息与分支上色，但「不要太鲜艳抢眼」；并指出
+    //    「只有最后一条的控件会自动显示，过往消息的控件需要鼠标悬浮才显现」，
+    //    选择 **3a**（悬浮出现时就上色，接受轻微跳变）。
+    //    → 按**元素存在**判定即可，常显与悬浮显现两种情形自然都覆盖。
+    //
+    //    ⚠️ 只染 button/a **自身**，不染后代文本 —— 否则容器里的
+    //    「已完成 · 用时」正文会被一起吞进来。
+    `${actions} svg{color:${color}}`,
+    `${actions} :is(button,[role="button"],a){color:${color}}`,
   ].join('\n');
 }
 

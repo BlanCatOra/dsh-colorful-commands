@@ -28,6 +28,7 @@ import {
   isCompactionRow,
   isRetryRow,
   readAttrs,
+  usageCategory,
 } from './classify.js';
 import { TITLE_SEPARATOR } from './constants.js';
 import { CAT_ATTR, MARK_ATTR, PART_ATTR, SCOPE_ATTR } from './css.js';
@@ -57,6 +58,24 @@ const CANDIDATE_SELECTOR = [
   '[data-process-activity]',
   '[data-kind]',
   '[data-slot]',
+  // ── 2026-10-17 新增：消息尾部与 composer 底部条 ──────────────────
+  //
+  // ⚠️ `[data-turn-tail]` 是真机实测的内核语义化属性（`kind: "turn-tail"`），
+  //    命中消息尾部（「已完成 · 用时」＋用量＋分支按钮）。
+  //    用户要求这两处上色，且「过往消息的控件悬浮才显现」→ 选择 **3a**：
+  //    悬浮出现时就上色（per-element 判定天然覆盖常显/悬浮两种情形）。
+  //
+  // ⚠️ `[data-composer-dock]` 是输入框底部条。**只认它里面的进度圈**
+  //    （由 aria-label 里的百分比分档），tokens 数字按用户要求**不上色**。
+  '[data-turn-tail]',
+  '[data-composer-dock]',
+  // ⚠️ 「已完成」是 `role="status"` 的**视觉隐藏** span（真机实测
+  //    `class="TrFNTq_visuallyHidden" role="status"`），且它**不带** data-* ——
+  //    不加这个选择器就永远扫不到，用户要求的"成功色"就无从谈起。
+  '[role="status"]',
+  // ⚠️ 进度圈那个按钮上**没有** data-* 属性，只有 `aria-label="上下文已用 29%"`，
+  //    所以必须用 aria-label 选择器把它捞进候选集（否则永远扫不到）。
+  '[aria-label*="%"]',
 ].join(',');
 
 /**
@@ -109,7 +128,24 @@ function nearestCandidate(node, maxDepth = 24) {
  * @returns 作用域名。
  */
 function scopeFor(attrs, options = {}) {
-  if (attrs['data-slot'] !== undefined) return 'tint';
+  // ── 2026-10-17 新增：消息尾部与 composer 底部条 ──────────────────
+  //
+  // ⚠️ 必须在 `data-slot` 之前判：`conversation.chat.turnTail` 是插槽锚点，
+  //    但它包着**整条尾部**（含"已完成 · 用时"文本），直接走 `tint` 会染太多。
+  //    turn-tail 里真正要染的是**用量数字与分支按钮**，它们是 `_actions` 下的
+  //    button —— 正是 `actions` 作用域的形状（只染 button/a 自身）。
+  if (attrs['data-turn-tail'] !== undefined) return 'actions';
+  // composer 底部条：只染进度圈按钮（它带 aria-label 百分比）。
+  // ⚠️ 这里**不染**同容器里的 tokens 数字 —— 用户明确要求不上色。
+  if (attrs['data-composer-dock'] !== undefined) return 'plain';
+  // ⚠️ 进度圈按钮本身（`aria-label="上下文已用 29%"`）也可能**单独**被扫到
+  //    （它不在 `data-composer-dock` 内部时）。它自己就是要染的那个元素。
+  if (options.isUsageRing === true) return 'self';
+  if (attrs['data-slot'] !== undefined) {
+    // turn-tail 插槽锚点是个 `display: contents` 包裹层，只染内部按钮。
+    if (attrs['data-slot'] === 'conversation.chat.turnTail') return 'actions';
+    return 'tint';
+  }
   // 过程组标题是一个 `<button>`，不是 DisclosureRow，没有折叠表头结构。
   //
   // ⚠️ 分成两个作用域，**不能**只用一个 + CSS 的 `:not(:has())` 兜底：
@@ -218,18 +254,14 @@ function commandTextFromFiber(element) {
  * 前若干字符足够判定。
  *
  * @param element 元素。
+ * @param attrs 属性快照。
+ * @param command 调用方已经读到的命令原文（读不到时传 null）。
  * @returns 用于判定的文本。
  */
-function dangerText(element, attrs) {
+function dangerText(element, attrs, command) {
   try {
-    // 只有 bash 行才去读 fiber：这是内核的私有结构，别的行（read/write…）的
-    // fiber 里也可能挂着 block，误读会把它劫持成命令行、类别全乱。
-    // 真机 bash 行的根元素是 `data-sample="bash"` + `data-variant="bash"`。
-    const isBash = attrs?.['data-sample'] === 'bash' || attrs?.['data-variant'] === 'bash';
-    if (isBash) {
-      const command = commandTextFromFiber(element);
-      if (command !== null) return command.slice(0, 300);
-    }
+    // `command` 由调用方传入（已经读过一次 fiber），这里不再重复遍历。
+    if (typeof command === 'string' && command !== '') return command.slice(0, 300);
     const header = typeof element.querySelector === 'function'
       ? element.querySelector('[data-disclosure-row]')
       : null;
@@ -342,19 +374,48 @@ export function tagElement(element) {
   if (typeof element.getAttribute !== 'function') return null;
 
   const attrs = readAttrs(element);
+  const isBash = attrs['data-sample'] === 'bash' || attrs['data-variant'] === 'bash';
+  // ⚠️ 只对 bash 行读 fiber：那是内核的私有结构，别的行（read/write…）的 fiber
+  //    里也可能挂着 block，误读会把它劫持成命令行、类别全乱。
+  const command = isBash ? commandTextFromFiber(element) : null;
+
   // 幂等：普通元素只处理一次；**判定依据会变的元素**每次都重判。
   //
-  // 两类必须重判：
+  // 三类必须重判：
   //  - 过程组标题（`data-process-activity`）：文本会在「标签 · 分析正文」之间来回变；
   //  - 权限选择控件（`conversation.input.permission`）：**同一个元素**在切换权限等级时
   //    只改文字，不换节点。用户反馈「4 个权限等级切换后颜色不会跟随切换」就是
   //    因为这里把它当静态元素、被 `data-cc-mark` 永久冻结成了第一次的颜色。
+  //  - ⚠️⚠️ bash 行且**还没读到命令原文**（`command === null`）：这是
+  //    「命令的三个颜色层级没有实现」的**真正根因**，务必别删。
+  //
+  //    命令行首次出现在 DOM 里时仍处于**流式运行中**，那一刻 React fiber 上的
+  //    `block.call.argsRaw` 尚未写入，`commandTextFromFiber` 返回 null，于是
+  //    回退到可见文本（模型的**自然语言描述**，如「List current slot registrations」），
+  //    描述里没有任何危险词 → 判成 `commandLow` → 立刻被 `MARK_ATTR` **永久冻结**。
+  //    等命令真正落到 fiber 上时，这里已经走"幂等跳过"分支，**再也不会重判**。
+  //    真机表现：所有命令行都是同一个浅色（用户实测反馈"三档没有实现"），
+  //    而 read/write/thinking 等静态行分类完全正常 —— 与截图证据一致。
+  //
+  //    修法：命令还没读到时不冻结，每次扫描重试；一旦读到就照常冻结。
+  const unresolvedBash = isBash && command === null;
   const dynamic = attrs['data-process-activity'] !== undefined
-    || attrs['data-slot'] === 'conversation.input.permission';
+    || attrs['data-slot'] === 'conversation.input.permission'
+    || unresolvedBash;
   if (!dynamic && element.getAttribute(MARK_ATTR) !== null) return element.getAttribute(CAT_ATTR);
 
-  const text = dangerText(element, attrs);
-  const category = classifyAttrs(attrs, { text, element });
+  const text = dangerText(element, attrs, command);
+  // ⚠️ 进度圈的百分比**只写在 `aria-label` 里**（真机实测：
+  //    `BUTTON{aria-label="上下文已用 29%"}`）。可见文本在 tooltip 未打开时
+  //    根本不存在，所以必须把 aria-label 单独取出来交给 usageCategory 解析。
+  //    同时这个按钮也是**要染的那个元素本身**，所以标记 isUsageRing。
+  const usageText = typeof attrs['aria-label'] === 'string' ? attrs['aria-label'] : '';
+  const isUsageRing = usageCategory(usageText) !== null;
+  const category = classifyAttrs(attrs, {
+    text,
+    element,
+    usageText,
+  });
   if (category === null) return null;
 
   try {
@@ -364,8 +425,10 @@ export function tagElement(element) {
     element.setAttribute(SCOPE_ATTR, scopeFor(attrs, {
       hasDetail: hasTitleDetail(text),
       category,
+      isUsageRing,
     }));
-    element.setAttribute(MARK_ATTR, '');
+    // ⚠️ 命令原文还没读到的 bash 行**不打 mark**：留到下一次扫描重判。
+    if (!unresolvedBash) element.setAttribute(MARK_ATTR, '');
     return category;
   } catch {
     // 只读/被冻结的 DOM：放弃这一个元素，不影响其他。
@@ -489,6 +552,18 @@ export function startObserver(options = {}) {
         for (const record of records) {
           if (record.type === 'childList') {
             for (const node of record.addedNodes) pending.push(node);
+            // ⚠️⚠️ 必须把**宿主元素本身**也入队（见下方 unresolvedBash）。
+            // 命令行从"运行中"变成"已完成"时，React 只是在行**内部**换子节点，
+            // 行的根元素没有任何变化。只把 addedNodes（那些深层子节点）交给
+            // tagTree，`querySelectorAll` 只会往下找，**永远回不到行根元素**，
+            // 于是"命令原文到了之后重判"这件事一次都不会发生。
+            // 这里额外把最近的候选祖先入队，保证行根元素每轮都被重扫。
+            try {
+              const host = nearestCandidate(record.target);
+              if (host !== null) pending.push(host);
+            } catch {
+              // 上溯失败：忽略，不影响其他节点。
+            }
             // ⚠️ **必须也看 removedNodes**：React 重渲染标题时会重设文本内容，
             // 把运行时插入的 `[data-cc-part="label"]` 一起移除。只处理 addedNodes
             // 就永远等不到"重新切分"的触发，于是标签时有时无、正文时而被整段染色

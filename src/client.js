@@ -34,7 +34,7 @@ import { LOCALE_NS, PLUGIN_ID, SETTINGS_NAMESPACE, STYLE_TAG_ID } from './consta
 import { dictionaries } from './locale.js';
 import { buildStylesheet, resolveColors } from './css.js';
 import { presetColors } from './palettes.js';
-import { createFailures, guard, writeBootReport } from './boot-diagnostics.js';
+import { createFailures, guard, safeStorage, writeBootReport } from './boot-diagnostics.js';
 import { startObserver } from './dom.js';
 import { ColorfulCommandsCard } from './settings-card.js';
 import { createSettingsFace, readConfig } from './settings-face.js';

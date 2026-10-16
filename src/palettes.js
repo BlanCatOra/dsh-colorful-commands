@@ -51,6 +51,62 @@ const SEMANTICS = {
 };
 
 /**
+ * 状态类配色（2026-10-17 新增）—— **固定色值，不从预设色库挑**。
+ *
+ * ## 为什么必须固定（而不是像内容类那样"按色相从色库选"）
+ *
+ * 状态类出现在**消息尾部**（`turn-tail`）与**输入框底部条**，语义只有三种：
+ * 成功 / 信息 / 分级的警示。它们**不表达工具语义**，所以没有"要跟预设风格
+ * 保持一致的语义色相"这回事。
+ *
+ * 而"按色相从色库挑"在这里**行不通**，有实测依据：
+ *  - 内容类已占用 25/35/150/172/195/212/215/230/285 九个色相，剩下的空档太窄；
+ *  - `japanese`（58 色）与 `macaron`（34 色）色库**太小**，塞进 19 个类别后
+ *    必然挑不到唯一色，`buildPalette` 的补漏阶段会降级复用 →
+ *    实测出现 `done vs write = #2E8B6E`、`usageMid vs retry = #B08A1E` 等撞色，
+ *    甚至有类别**完全无解**（`done 缺失`）。
+ *
+ * 改成固定色值后：
+ *  - 三套预设共用同一组状态色（它们本来就与预设风格无关）；
+ *  - 色相与内容区**完全错开**，从构造上不可能撞色；
+ *  - 饱和度统一压低（32–56），满足用户三次强调的"不要太鲜艳抢眼"。
+ *
+ * ⚠️ 四档的**饱和度必须递增**（低→高：40/44/48/56）：用户要求"自己分级"，
+ *    而只靠色相区分在小尺寸进度圈上不够醒目。亮度另有 `contrast` 测试守住。
+ */
+const STATUS_COLORS = {
+  // `summary`（**聚合**过程组标题：同一组里含多种活动）。
+  //
+  // ⚠️ 用户 2026-10-17 反馈"太混乱了"：同一件事因活动排列顺序不同，
+  //    `data-process-activity` 只保留其中一个，于是被染成蓝/绿/玫红三种色。
+  //    聚合摘要**没有单一语义**，所以给中性灰 —— 它的作用不是"表达语义"，
+  //    而是**消除混乱**，让混合活动一眼就看得出"这是汇总，不是单一操作"。
+  //
+  // ⚠️ 曾经让它参与内容区选色（hue 215），结果**夹在 read(212) 与 compaction(195)
+  //    之间抢走 read 的天然匹配色**，导致 `read` 与 `compaction` 撞成同一个
+  //    `#2A7BA8`（被去重测试当场抓住）。所以它也必须走固定色。
+  summary: { light: '#6E7480', dark: '#98A0AC' },
+  // 「已完成 · 用时 xxx」：用户明确要求成功色（绿色系）。
+  // 取偏冷的墨绿 `#2F6B4F`（浅）/ `#7FC49B`（深）—— 与内容区 `write` 的
+  // 正绿（150°）明显不同（这里是 152° 但更暗更灰），且不是命令区的红色系。
+  done: { light: '#2F6B4F', dark: '#7FC49B' },
+  // 尾部用量数字 / 分支按钮：信息性，低饱和石板蓝灰，"存在但不抢戏"。
+  meta: { light: '#5A6B7C', dark: '#8FA3B5' },
+  // 上下文进度圈四档：<35 绿 → 35-49 黄 → 50-67 橙 → >=68 红。
+  // 用户要求"35 以下绿色系，自己分级"+ 结合 DSH 自动压缩阈值 68%（"两者综合"）。
+  usageLow: { light: '#3F7A4A', dark: '#7EC08C' },
+  usageMid: { light: '#87762A', dark: '#D6C56A' },
+  usageHigh: { light: '#9A5A22', dark: '#E0A055' },
+  usageCritical: { light: '#B0291F', dark: '#F06A52' },
+};
+
+/**
+ * 状态类别名（供 `presetColors` 合并）。
+ */
+const STATUS_KEYS = Object.keys(STATUS_COLORS);
+
+
+/**
  * 权限等级 → 语义色相（用户要求"不同权限等级的颜色应该不同"）。
  *
  * 单独一张表、单独一次选色，理由是**跨区域复用颜色是允许的**：内容区已经用掉了
@@ -241,7 +297,17 @@ export function presetColors(presetId) {
     palette = buildPalette(MACARON_COLORS, SEMANTICS);
   }
   // 命令三档固定叠在预设之上（用户指定的红色系）。
-  const merged = { ...palette, ...RED_TIERS, ...permissionColorsFor(presetId) };
+  const content = { ...palette, ...RED_TIERS };
+  // ⚠️ 状态类（消息尾部 / 输入框底部条）**单独选色**，并把内容类已用的色值
+  //    传进去排除 —— 两组之间、以及组内都不能撞色。
+  //    背景见 STATUS_SEMANTICS 的说明（并进内容区会抢走 read 的天然匹配色）。
+  // 状态类固定色（不参与色库选色，见 STATUS_COLORS 说明）。
+  const status = {};
+  for (const key of STATUS_KEYS) {
+    const v = STATUS_COLORS[key];
+    status[key] = { light: v.light, dark: v.dark, lightName: '状态色', darkName: '状态色' };
+  }
+  const merged = { ...content, ...status, ...permissionColorsFor(presetId) };
   cache.set(presetId, merged);
   return { ...merged };
 }
