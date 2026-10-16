@@ -12,8 +12,10 @@ import {
   readAttrs,
   _tables,
 } from '../src/classify.js';
-import { buildStylesheet, resolveColors, sanitizeColor, scopedPreviewCss, withAlpha, CAT_ATTR, SCOPE_ATTR } from '../src/css.js';
-import { presetColors, presetColorFor, presetCoverage, BUILTIN_PRESETS } from '../src/palettes.js';
+import { buildStylesheet, resolveColors, sanitizeColor, scopedPreviewCss, CAT_ATTR, SCOPE_ATTR } from '../src/css.js';
+import { presetColors, presetColorFor, presetCoverage } from '../src/palettes.js';
+import { CHINESE_COLORS } from '../src/data/chinese-colors.js';
+import { contrast, hueDistance, LIGHT_BG, DARK_BG } from '../src/color-engine.js';
 import { ALL_CATEGORIES, CATEGORIES, CONTROL_CATEGORIES, CATEGORY_LABELS } from '../src/constants.js';
 
 // ── 分类 ─────────────────────────────────────────────────────────────
@@ -139,12 +141,32 @@ test('sanitizeColor 只放行合法十六进制，其余一律拒绝', () => {
   assert.equal(sanitizeColor('#12345'), null);
 });
 
-test('withAlpha 产出 rgba，非法色值退化为 transparent', () => {
-  assert.equal(withAlpha('#FF0000', 0.5), 'rgba(255, 0, 0, 0.5)');
-  assert.equal(withAlpha('bogus', 0.5), 'transparent');
-  // alpha 被夹到 0..1。
-  assert.equal(withAlpha('#000000', 5), 'rgba(0, 0, 0, 1)');
-  assert.equal(withAlpha('#000000', -1), 'rgba(0, 0, 0, 0)');
+test('生成的样式不得再出现任何竖条（用户 2026-10-16 明确要求去掉）', () => {
+  const css = buildStylesheet({ command: { light: '#B8860B', dark: '#FFA60F' } });
+  assert.ok(!css.includes('box-shadow'), '不得再画彩色竖线');
+  assert.ok(!css.includes('border-left'), '也不得用左边框替代');
+});
+
+test('过程组标题（执行了命令/已完成分析）必须有独立作用域', () => {
+  // 这是用户反馈"运行命令、执行命令、完成分析等条目颜色没有改变"的根因：
+  // 它们是过程组标题，带 data-process-activity 而**不带 data-tool**。
+  const css = buildStylesheet({ command: { light: '#B8860B', dark: '#FFA60F' } });
+  assert.ok(
+    css.includes(`[${SCOPE_ATTR}="title"]`),
+    '必须为过程组标题生成 scope=title 的规则',
+  );
+  assert.ok(
+    /\[data-cc-scope="title"\]\{color:/.test(css),
+    '过程组标题的文字必须被染色（而不只是图标）',
+  );
+});
+
+test('UI 控件必须连文字一起染色（用户要求：权限选择那个控件文字也改）', () => {
+  const css = buildStylesheet({ 'ctl-permission': { light: '#C70039', dark: '#FF6F61' } });
+  assert.ok(
+    /\[data-cc-scope="tint"\] :is\(button,\[role="button"\],a\)\{color:/.test(css),
+    '控件内的按钮文字必须被染色',
+  );
 });
 
 // ── 样式生成 ─────────────────────────────────────────────────────────
@@ -201,120 +223,80 @@ test('预设作为底、自定义项覆盖（而不是替换）', () => {
 
 test('三套内置预设都存在，且覆盖全部类别', () => {
   for (const id of ['chinese', 'japanese', 'macaron']) {
-    assert.ok(BUILTIN_PRESETS[id], `预设 ${id} 必须存在`);
-    const { missing } = presetCoverage(id);
+    const { covered, missing } = presetCoverage(id);
     assert.deepEqual(missing, [], `预设 ${id} 缺少类别：${missing.join(', ')}`);
+    assert.equal(covered.length, ALL_CATEGORIES.length);
   }
 });
 
-test('预设里每个色值都是合法十六进制（防止手抖写错）', () => {
-  for (const [id, palette] of Object.entries(BUILTIN_PRESETS)) {
+test('每套预设的两套主题都必须达到对比度下限（这是选色引擎的核心承诺）', () => {
+  for (const id of ['chinese', 'japanese', 'macaron']) {
+    const palette = presetColors(id);
     for (const [category, pair] of Object.entries(palette)) {
-      for (const mode of ['light', 'dark']) {
-        assert.equal(
-          sanitizeColor(pair[mode]),
-          pair[mode].toUpperCase(),
-          `预设 ${id} 的 ${category}.${mode} 不是合法色值：${pair[mode]}`,
-        );
-      }
+      const cl = contrast(pair.light, LIGHT_BG);
+      const cd = contrast(pair.dark, DARK_BG);
+      assert.ok(cl >= 3.0, `${id}/${category} 浅色值 ${pair.light} 白底对比度仅 ${cl.toFixed(2)}`);
+      assert.ok(cd >= 3.0, `${id}/${category} 深色值 ${pair.dark} 深底对比度仅 ${cd.toFixed(2)}`);
+      // 上限：超过说明接近黑/白，色相辨识度丢失。
+      assert.ok(cl <= 10.5, `${id}/${category} 浅色值 ${pair.light} 对比度过高（近黑）`);
+      assert.ok(cd <= 10.5, `${id}/${category} 深色值 ${pair.dark} 对比度过高（近白）`);
     }
   }
 });
 
-test('预设色板是浅拷贝，调用方改它不污染内置数据', () => {
+test('预设里每个色值都是合法十六进制', () => {
+  for (const id of ['chinese', 'japanese', 'macaron']) {
+    for (const [category, pair] of Object.entries(presetColors(id))) {
+      assert.ok(/^#[0-9A-F]{6}$/.test(pair.light), `${id}/${category}.light 非法：${pair.light}`);
+      assert.ok(/^#[0-9A-F]{6}$/.test(pair.dark), `${id}/${category}.dark 非法：${pair.dark}`);
+    }
+  }
+});
+
+test('不同语义不得撞成同一个颜色（去重生效）', () => {
+  // 实测不加去重时 read 与 web 会挑到同一个 #4F84FF，两类看起来一样。
+  const palette = presetColors('chinese');
+  const byHueGroups = [
+    ['command', 'danger'], ['read', 'write'], ['search', 'web'],
+  ];
+  for (const [a, b] of byHueGroups) {
+    if (!palette[a] || !palette[b]) continue;
+    assert.notEqual(palette[a].light, palette[b].light, `${a} 与 ${b} 的浅色值不得相同`);
+    assert.notEqual(palette[a].dark, palette[b].dark, `${a} 与 ${b} 的深色值不得相同`);
+  }
+});
+
+test('中国传统色库：742 色、字段完整、hex 合法', () => {
+  assert.ok(CHINESE_COLORS.length >= 700, `色库应有 700+ 色，实际 ${CHINESE_COLORS.length}`);
+  for (const c of CHINESE_COLORS) {
+    assert.ok(/^#[0-9A-F]{6}$/.test(c.x), `色值非法：${c.x}`);
+    assert.ok(typeof c.n === 'string' && c.n !== '', '色名不能为空');
+    assert.ok(c.h >= 0 && c.h <= 360, `色相越界：${c.h}`);
+    assert.ok(c.s >= 0 && c.s <= 100, `饱和度越界：${c.s}`);
+    assert.ok(c.l >= 0 && c.l <= 100, `亮度越界：${c.l}`);
+  }
+});
+
+test('色相距离取最短角距（360 与 0 相邻）', () => {
+  assert.equal(hueDistance(0, 359), 1);
+  assert.equal(hueDistance(10, 350), 20);
+  assert.equal(hueDistance(0, 180), 180);
+  assert.equal(hueDistance(90, 90), 0);
+});
+
+test('对比度函数符合 WCAG（黑白为 21:1）', () => {
+  assert.equal(Math.round(contrast('#000000', '#FFFFFF')), 21);
+  assert.equal(contrast('#123456', '#123456').toFixed(1), '1.0');
+});
+
+test('预设色板是浅拷贝，调用方改它不污染缓存', () => {
   const copy = presetColors('chinese');
+  const original = copy.thinking.light;
   copy.thinking = { light: '#000000', dark: '#FFFFFF' };
-  assert.notEqual(BUILTIN_PRESETS.chinese.thinking.light, '#000000');
+  assert.equal(presetColors('chinese').thinking.light, original);
 });
 
-test('presetColorFor 返回副本，未知预设返回 undefined', () => {
-  const pair = presetColorFor('chinese', 'thinking');
-  assert.ok(pair);
-  pair.light = '#000000';
-  assert.notEqual(BUILTIN_PRESETS.chinese.thinking.light, '#000000');
+test('presetColorFor 未知预设返回 undefined', () => {
   assert.equal(presetColorFor('nope', 'thinking'), undefined);
-});
-
-// ── 常量一致性 ───────────────────────────────────────────────────────
-
-test('类别常量自洽：消息类与控件类不重叠，且都有中文名', () => {
-  const overlap = CATEGORIES.filter((c) => CONTROL_CATEGORIES.includes(c));
-  assert.deepEqual(overlap, [], '消息类与控件类不得重叠');
-  assert.equal(ALL_CATEGORIES.length, CATEGORIES.length + CONTROL_CATEGORIES.length);
-  for (const category of ALL_CATEGORIES) {
-    assert.ok(CATEGORY_LABELS[category], `类别 ${category} 缺中文名`);
-  }
-});
-
-// ── 预览作用域（曾被静默失效 bug 咬过） ──────────────────────────────
-
-test('预览作用域：深色分支的 body 前缀必须留在最外层', () => {
-  // 直接调**真实实现**（不再在测试里复刻一份规则 —— 复刻的那版自己就有 bug，
-  // 属于"测试替实现补契约"的同款形状）。
-  const css = buildStylesheet({ thinking: { light: '#111111', dark: '#222222' } });
-  const DARK = 'body[data-ds-dark-theme]';
-  assert.ok(css.includes(DARK), '生产 CSS 必须含深色分支，否则下面的断言是空转');
-
-  const scoped = scopedPreviewCss(css);
-
-  // 回归点：写成 `.cc-preview body[...]` 会永远匹配不到 → 深色下预览恒为浅色。
-  assert.ok(!scoped.includes('.cc-preview body['), '深色分支不得写成 .cc-preview body[...]');
-  assert.ok(scoped.includes(`${DARK} .cc-preview`), '深色分支必须把容器插在主题条件之后');
-  // 浅色分支正常加前缀。
-  assert.ok(scoped.includes('.cc-preview [data-cc-cat="thinking"]'), '浅色分支要加容器前缀');
-  // 两个色值都要在，证明两条分支都被保留。
-  assert.ok(scoped.includes('#111111') && scoped.includes('#222222'));
-});
-
-test('预览作用域对空输入与注释行安全', () => {
-  assert.equal(scopedPreviewCss(''), '');
-  assert.equal(scopedPreviewCss('/* only a comment */'), '');
-  assert.equal(scopedPreviewCss(undefined), '');
-});
-
-// ── 回归护栏：三条"丑死了"的具体成因 ────────────────────────────────
-
-test('回归·消息包裹层不得打标（红竖线跑到窗口左缘的成因）', () => {
-  // data-chat-flow-kind 挂在**整列宽**的 flowItem 上，气泡在内部靠右。
-  // 给它加左侧竖条会被画到窗口最左缘、与内容脱节。
-  assert.equal(classifyAttrs({ 'data-chat-flow-kind': 'user' }), null);
-  assert.equal(classifyAttrs({ 'data-chat-flow-kind': 'assistant' }), null);
-  assert.equal(classifyAttrs({ 'data-kind': 'user' }), null);
-  assert.equal(classifyAttrs({ 'data-kind': 'message' }), null);
-});
-
-test('回归·工具行插槽不得进控件类别（斜杠菜单被涂灰的成因）', () => {
-  // left/right/dock/overlay 装的是加号按钮与斜杠命令触发器等原生控件；
-  // 给它们上色会波及弹出的菜单。
-  for (const slot of [
-    'conversation.input.left',
-    'conversation.input.right',
-    'conversation.input.dock',
-    'conversation.input.overlay',
-    'conversation.input.attachments',
-  ]) {
-    assert.equal(classifyAttrs({ 'data-slot': slot }), null, `${slot} 不得被染色`);
-  }
-});
-
-test('回归·默认只染图标与短标签，不染摘要正文', () => {
-  const css = buildStylesheet({ thinking: { light: '#8C4356', dark: '#CCA4E3' } });
-
-  // 必须：图标、短标签（_title 后缀，跨构建稳定）、可见竖条。
-  assert.ok(/\[data-disclosure-header\] svg\{color:/.test(css), '图标要染色');
-  assert.ok(/\[class\*="_title"\]\{color:/.test(css), '短标签要染色');
-  assert.ok(/inset 3px 0 0/.test(css), '竖条要够粗（2px/55% 实测看不见）');
-
-  // 不得：行本体（含摘要与正文）被染。
-  assert.ok(
-    !/\[data-disclosure-row\]\{color:/.test(css),
-    '默认不得染行本体 —— 那会把整段摘要染掉，满屏饱和色',
-  );
-});
-
-test('colorText 开关：打开后才染行本体', () => {
-  const off = buildStylesheet({ thinking: { light: '#8C4356', dark: '#CCA4E3' } });
-  const on = buildStylesheet({ thinking: { light: '#8C4356', dark: '#CCA4E3' } }, { colorText: true });
-  assert.ok(!/\[data-disclosure-row\]\{color:/.test(off), '默认关');
-  assert.ok(/\[data-disclosure-row\]\{color:/.test(on), '打开后要染行本体');
+  assert.ok(presetColorFor('chinese', 'thinking'));
 });

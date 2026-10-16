@@ -38,7 +38,7 @@ import {
   Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives';
 import { ALL_CATEGORIES, CATEGORIES, CONTROL_CATEGORIES } from './constants.js';
-import { presetColorFor, presetColors, BUILTIN_PRESETS } from './palettes.js';
+import { presetColorFor, presetColors } from './palettes.js';
 import { CATEGORY_KEYS, PRESET_KEYS } from './locale.js';
 import { sanitizeColor, scopedPreviewCss } from './css.js';
 
@@ -72,8 +72,7 @@ function effectiveColor(draft, category) {
  * @returns `[{ light, dark }]` 列表，本类别自己的一对排在最前。
  */
 function swatchesFor(presetId, category) {
-  const palette = BUILTIN_PRESETS[presetId];
-  if (palette === undefined) return [];
+  const palette = presetColors(presetId);
   const own = palette[category];
   const seen = new Set();
   const list = [];

@@ -79,6 +79,38 @@ const KIND_CATEGORY = {
 };
 
 /**
+ * 过程组标题：`data-process-activity` → 类别。
+ *
+ * ⚠️ **这是"执行了命令 / 已完成分析 / 已读取文件"没变色的根因。**
+ * 那些是**过程组标题**（`ChatGroupSeat` 的 `ProcessGroupHeader`），它们的 DOM
+ * 钩子是 `data-process-activity`，**不带 `data-tool`**，所以第一版完全没标记它们。
+ *
+ * 取值来自内核 `ui-chat` 的 `PROCESS_ICONS` 与 `message.stepProcess.*` 文案键
+ * （实测枚举）：thinking / read / readImage / search / edit / write / commands /
+ * code / plan / questions / subagents / tools / webFetch / webSearch。
+ * 未列出的取值落 `other`，因此宿主以后新增活动类型也会被着色，不会漏。
+ *
+ * `tools` / `commands` 是**聚合**类（"已调用工具"/"执行了命令"），归 command
+ * 更符合直觉 —— 用户看到的就是一串命令。
+ */
+const ACTIVITY_CATEGORY = {
+  thinking: 'thinking',
+  plan: 'thinking',
+  read: 'read',
+  readImage: 'read',
+  search: 'search',
+  edit: 'write',
+  write: 'write',
+  code: 'write',
+  commands: 'command',
+  tools: 'command',
+  webFetch: 'web',
+  webSearch: 'web',
+  subagents: 'other',
+  questions: 'other',
+};
+
+/**
  * DSH 插槽名 → 控件类别。`ui-renderer` 的 `renderSlot` 会给每个插槽条目
  * 套一层 `[data-slot="<槽名>"]`，这是**官方稳定契约**（不是内部实现细节），
  * 所以"其他控件也一样可染色"就靠它。
@@ -136,6 +168,13 @@ export function classifyAttrs(attrs, options = {}) {
   const slot = a['data-slot'];
   if (typeof slot === 'string' && Object.hasOwn(SLOT_CATEGORY, slot)) return SLOT_CATEGORY[slot];
 
+  // 1.5 过程组标题（"执行了命令"/"已完成分析"）—— 它们**不带 data-tool**，
+  //     只有 data-process-activity，所以必须单独判，否则整类漏掉不着色。
+  const activity = a['data-process-activity'];
+  if (typeof activity === 'string' && activity !== '') {
+    return ACTIVITY_CATEGORY[activity] ?? 'other';
+  }
+
   // 2. 工具行：data-tool 精确到具体工具名。
   const tool = a['data-tool'];
   if (typeof tool === 'string' && tool !== '') {
@@ -176,6 +215,7 @@ export function readAttrs(element) {
   if (element === null || element === undefined || typeof element.getAttribute !== 'function') return {};
   const names = [
     'data-slot',
+    'data-process-activity',
     'data-tool',
     'data-variant',
     'data-kind',
@@ -189,4 +229,4 @@ export function readAttrs(element) {
 }
 
 /** 导出内部表，供测试断言覆盖完整性。 */
-export const _tables = { TOOL_CATEGORY, VARIANT_CATEGORY, KIND_CATEGORY, SLOT_CATEGORY };
+export const _tables = { TOOL_CATEGORY, VARIANT_CATEGORY, KIND_CATEGORY, ACTIVITY_CATEGORY, SLOT_CATEGORY };

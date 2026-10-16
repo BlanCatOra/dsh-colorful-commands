@@ -141,21 +141,48 @@ export function apply(ctx) {
     ctx.effect(() => stop, `${PLUGIN_ID}: dom observer`);
   });
 
-  // ── 4. 设置：绑定命名空间并跟随变化 ─────────────────────────────
-  guard(failures, 'settings', () => {
+  // ── 4. 设置卡片：**无条件注册** ─────────────────────────────────
+  //
+  // ⚠️⚠️ 这里曾经是本插件"设置页什么都不显示"的真正原因，务必别改回去。
+  //
+  // 第一版把 `registerCard(...)` 放在了 `forms.whileServed([命名空间], cb)`
+  // **内部**，于是：
+  //   命名空间未就绪 → whileServed 不触发 → 卡片**从未注册** → 设置页空白。
+  // 而且这**不报错**（whileServed 只是等待，不算失败），所以测试全绿、日志干净，
+  // 完全看不出问题。
+  //
+  // 规范原话（dsh-connect-workbuddy 的注释）：
+  //   「渲染条件由组件自己决定：**无条件注册**、组件里读投影判断是否返回 null。
+  //     注册是条件性的会导致『该出现时不出现』。」
+  //
+  // 所以：卡片**无条件注册**；settings scope 单独在下面绑定，晚到也没关系
+  // —— face 对 `scope === undefined` 有完整降级（显示默认色 + 只读提示）。
+  const face = createSettingsFace({
+    scope: undefined,
+    t,
+    // 配置变化 → 重渲染样式表。face 只管设置数据，样式注入是这里的职责。
+    onConfigChange: (config) => {
+      current = config;
+      renderFromConfig(config);
+    },
+    onError: (where, error) => {
+      failures.push({ where, message: String(error?.message ?? error), stack: '' });
+    },
+  });
+  guard(failures, 'settings:register-card', () => {
+    const offCard = registerCard(ctx, failures, t, face);
+    ctx.effect(() => offCard, `${PLUGIN_ID}: settings card`);
+  });
+
+  // ── 5. 设置：绑定命名空间并跟随变化（与卡片注册解耦） ────────────
+  guard(failures, 'settings:bind-namespace', () => {
     // configForms 用 ctx.get 探测：命名空间可能晚于 apply 到达。
-    // ⚠️ `ctx.get` 本身也可能不在（极端降级上下文），所以要判类型再调 ——
-    // 直接 `ctx.get(...)` 会抛 TypeError，虽然被 guard 兜住，但那会白白丢掉
-    // "用默认配色继续工作"的机会。
+    // ⚠️ `ctx.get` 本身也可能不在（极端降级上下文），所以要判类型再调。
     const get = typeof ctx.get === 'function' ? ctx.get.bind(ctx) : undefined;
     const forms = get === undefined ? undefined : get('configForms');
     if (forms === undefined || typeof forms.whileServed !== 'function') {
       // 没有 settings 服务：插件仍工作（用默认配色），只是不能配置。
-      failures.push({
-        where: 'settings:no-config-forms',
-        message: 'configForms service is unavailable; settings card not registered',
-        stack: '',
-      });
+      // 注意这是**降级而非失败**：不 push failures，避免把正常部署误报成故障。
       return;
     }
 
@@ -168,46 +195,15 @@ export function apply(ctx) {
         return () => {};
       }
 
-      // 配置变化 → 重新渲染样式。
-      const sync = () => {
-        try {
-          current = readConfig(scope.getSnapshot());
-          renderFromConfig(current);
-        } catch (error) {
-          failures.push({ where: 'settings:sync', message: String(error?.message ?? error), stack: '' });
-        }
-      };
-      let unsubscribe;
-      try {
-        unsubscribe = scope.subscribe(sync);
-      } catch (error) {
-        failures.push({ where: 'settings:subscribe', message: String(error?.message ?? error), stack: '' });
-      }
-      sync();
-
-      // 设置卡片（插件详情页）。
-      const face = createSettingsFace({
-        scope,
-        t,
-        onError: (where, error) => {
-          failures.push({ where, message: String(error?.message ?? error), stack: '' });
-        },
-      });
-      const offCard = registerCard(ctx, failures, t, face);
-
+      // 把 scope 接进已经注册好的卡片面（卡片本身早已注册，与这里无关）。
+      face.attachScope(scope);
       return () => {
-        try {
-          unsubscribe?.();
-        } catch {
-          // 忽略。
-        }
-        face.dispose();
-        offCard?.();
+        face.detachScope();
       };
     }), `${PLUGIN_ID}: settings namespace`);
   });
 
-  // ── 5. 写启动报告（无论成败；ok:false 会列出失败步骤） ──────────
+  // ── 6. 写启动报告（无论成败；ok:false 会列出失败步骤） ──────────
   guard(failures, 'boot-report', () => {
     writeBootReport(failures, { inject: inject.join(',') });
   });

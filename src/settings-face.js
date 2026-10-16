@@ -65,14 +65,35 @@ export function draftCss(draft) {
 /**
  * 创建一个设置卡片面。
  *
- * @param options.scope configForms scope（可能 undefined：命名空间尚未就绪）。
+ * ## 生命周期：先注册、后接 scope
+ *
+ * 卡片**无条件注册**，而 settings scope 可能晚到（甚至永远不到）。所以本对象
+ * 先以 `scope === undefined` 的降级状态构造，之后由 `attachScope(scope)` 接上。
+ *
+ * 为什么必须这样拆（实测事故）：第一版把"注册卡片"放在 `whileServed` 内部，
+ * 命名空间没就绪时卡片**从未注册**，设置页一片空白 —— 而且不报错，测试全绿。
+ *
+ * @param options.scope 初始 scope（可省略）。
  * @param options.t 文案函数。
- * @param options.onError 失败回调（收集进启动报告）。
- * @returns face 对象，作为插槽 `inject` 的返回值。
+ * @param options.onError 失败回调。
+ * @returns face 对象。
  */
 export function createSettingsFace(options = {}) {
-  const { scope, t } = options;
+  const { t } = options;
   const report = typeof options.onError === 'function' ? options.onError : () => {};
+
+  /** 当前 scope（可被 attachScope 替换）。 */
+  let scope = options.scope;
+  let unsubscribe;
+  /**
+   * 配置变化回调：由调用方（client.js）注入，用来把最新配置写成样式表。
+   *
+   * 之所以要这个回调而不是让 face 自己写样式：face 只该管"设置数据"，
+   * 样式注入是 client 的职责（它持有 styleElement）。分开也让 face 可单测。
+   */
+  const notifyConfigChange = typeof options.onConfigChange === 'function'
+    ? options.onConfigChange
+    : () => {};
 
   const initial = readConfig(scope?.getSnapshot?.());
 
@@ -87,7 +108,7 @@ export function createSettingsFace(options = {}) {
     writable: scope?.getSnapshot?.().writable !== false,
   });
 
-  /** scope 变化时：非脏则跟随，脏则保留用户草稿。 */
+  /** scope 变化时：非脏则跟随，脏则保留用户草稿，并**通知外部重渲染样式**。 */
   const syncFromScope = () => {
     try {
       const snapshot = scope?.getSnapshot?.();
@@ -101,19 +122,65 @@ export function createSettingsFace(options = {}) {
         // 用户正在改的时候不要覆盖他的草稿。
         if (!dirty) draft.config = { ...next };
       });
+      // ⚠️ 必须把最新草稿交回给调用方去**重渲染样式表**。
+      // 曾经的教训：拆开"注册卡片"与"绑定 scope"之后，这里只更新了 store，
+      // 没人再调 renderFromConfig —— 结果改配置界面不动，测试立刻抓到了。
+      notifyConfigChange(store.getSnapshot().config);
     } catch (error) {
       report('face:sync', error);
     }
   };
 
-  let unsubscribe;
-  try {
-    if (typeof scope?.subscribe === 'function') unsubscribe = scope.subscribe(syncFromScope);
-  } catch (error) {
-    report('face:subscribe', error);
-  }
+  /** 订阅当前 scope（先退订旧的）。 */
+  const bindScopeSubscriptions = () => {
+    try {
+      unsubscribe?.();
+    } catch { /* 忽略 */ }
+    unsubscribe = undefined;
+    try {
+      if (typeof scope?.subscribe === 'function') unsubscribe = scope.subscribe(syncFromScope);
+    } catch (error) {
+      report('face:subscribe', error);
+    }
+    syncFromScope();
+  };
+
+  if (scope !== undefined) bindScopeSubscriptions();
 
   const face = {
+    /**
+     * 接上（或替换）settings scope。晚到也能用：卡片早已注册。
+     *
+     * @param nextScope configForms 的命名空间 scope。
+     */
+    attachScope: (nextScope) => {
+      scope = nextScope;
+      try {
+        store.update((state) => {
+          state.available = nextScope !== undefined;
+          state.writable = nextScope?.getSnapshot?.().writable !== false;
+        });
+      } catch (error) {
+        report('face:attach', error);
+      }
+      bindScopeSubscriptions();
+    },
+    /** 断开 scope（命名空间下线）。 */
+    detachScope: () => {
+      try {
+        unsubscribe?.();
+      } catch { /* 忽略 */ }
+      unsubscribe = undefined;
+      scope = undefined;
+      try {
+        store.update((state) => {
+          state.available = false;
+          state.writable = false;
+        });
+      } catch (error) {
+        report('face:detach', error);
+      }
+    },
     /**
      * 组件订阅完整快照。
      *
@@ -142,7 +209,9 @@ export function createSettingsFace(options = {}) {
       const before = store.getSnapshot();
       if (before.saving) return;
       if (sameConfig(before.config, before.baseline)) return;
-      if (before.writable === false) {
+      // scope 还没到 / 不可写：标记失败而不是抛错（卡片是无条件注册的，
+      // 命名空间可能永远不到，这条路径必须能安全走过）。
+      if (scope === undefined || typeof scope.set !== 'function' || before.writable === false) {
         store.update((state) => {
           state.failed = true;
         });

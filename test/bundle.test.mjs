@@ -13,6 +13,7 @@ import { test } from 'node:test';
 import { readFile } from 'node:fs/promises';
 
 import loadClient from './helpers/load-client.mjs';
+import { presetColors } from '../src/palettes.js';
 
 /** react 桩：够 bundle 顶层求值与组件函数调用。 */
 function makeReactStub() {
@@ -253,7 +254,10 @@ test('改配置后样式表跟着变（改色真的生效）', async () => {
   const after = style.textContent;
 
   assert.notEqual(before, after, '预设变化必须重新生成样式');
-  assert.ok(after.includes('#A8E6CF') || after.includes('#C9B6E4'), '马卡龙色值应出现在新样式中');
+  // ⚠️ 断言的色值从色板推导，不硬编码 —— 预设是引擎算出来的，值会随阈值演进。
+  const macaron = presetColors('macaron');
+  const expect = Object.values(macaron).flatMap((p) => [p.light, p.dark]);
+  assert.ok(expect.some((hex) => after.includes(hex)), '马卡龙色板的色值应出现在新样式中');
 });
 
 test('关闭开关后样式被移除（不残留旧配色）', async () => {
@@ -519,4 +523,77 @@ test('契约：entryKey 与 cordis.patch.yml 的 insert id 必须对得上', asy
   client.apply(ctx);
   const card = registrations.find((r) => r.name === 'plugins.bundle.config');
   assert.equal(card.key, pkgName, 'bundle.config 的 key 必须等于包名');
+});
+
+test('回归·命名空间未就绪时，设置卡片仍必须已注册', async () => {
+  // 这是"设置页什么都不显示"的真正成因：
+  // 第一版把 registerCard 放在 whileServed 的回调**内部** —— 命名空间没到
+  // 就不注册，设置页一片空白，而且**不报错**（whileServed 只是等待，不算失败），
+  // 所以测试全绿、日志干净，完全看不出问题。
+  //
+  // 规范原话：「渲染条件由组件自己决定：无条件注册、组件里读投影判断是否返回
+  // null。注册是条件性的会导致『该出现时不出现』。」
+  installDocument();
+  const client = await loadClient(BASE());
+  const scope = makeScope();
+
+  // 造一个**永不服务命名空间**的 forms：whileServed 的回调永不触发。
+  const neverForms = {
+    whileServed: () => () => {},
+    get: () => scope,
+  };
+  const { ctx, registrations } = makeCtx({ forms: neverForms });
+
+  client.apply(ctx);
+
+  const card = registrations.find((r) => r.name === 'plugins.bundle.config');
+  assert.ok(card, '即使命名空间永不到达，设置卡片也必须已注册（无条件注册）');
+  assert.equal(card.key, 'dsh-colorful-commands');
+
+  // 且 inject 面必须可用（scope 为 undefined 时要能优雅降级，不能抛）。
+  const face = card.inject();
+  assert.doesNotThrow(() => face.useDraft((s) => s));
+  assert.doesNotThrow(() => {
+    const snap = face.useDraft((s) => s);
+    const st = face.formState(snap);
+    assert.equal(st.available, false, 'scope 未就绪时应显示为不可用');
+  });
+  // 保存不能抛（scope 缺失）。注意 onSave 是 void 返回，所以断言"不抛"而非"不 reject"。
+  assert.doesNotThrow(() => face.onSave());
+});
+
+test('回归·scope 晚到后样式必须跟着更新', async () => {
+  // 拆开"注册卡片"与"绑定 scope"之后曾漏掉这一环：只更新了 store，
+  // 没人再调 renderFromConfig —— 界面不动。
+  const { created } = installDocument();
+  const client = await loadClient(BASE());
+  // ⚠️ 必须用与首帧默认**不同**的预设：首帧默认就是 chinese，若 scope 也是
+  // chinese，CSS 逐字节相同，断言会假失败（第一版就踩了这个）。
+  const scope = makeScope({ preset: 'macaron' });
+
+  // 用一个可以先挂起、后触发的 forms。
+  // 用数组收集：whileServed 可能被调用多次（这本身也说明注册是无条件发生的）。
+  const fires = [];
+  const deferredForms = {
+    whileServed: (_ns, register) => {
+      fires.push(register);
+      return () => {};
+    },
+    get: () => scope,
+  };
+  const { ctx, registrations } = makeCtx({ forms: deferredForms });
+  client.apply(ctx);
+
+  assert.ok(fires.length > 0, 'whileServed 应被调用');
+  const style = created[0];
+  const before = style.textContent;
+
+  // 命名空间到位。
+  fires[0]();
+
+  const after = style.textContent;
+  assert.notEqual(before, after, 'scope 到位后必须重新生成样式');
+  const macaron = presetColors('macaron');
+  const expect = Object.values(macaron).flatMap((p) => [p.light, p.dark]);
+  assert.ok(expect.some((hex) => after.includes(hex)), '应含马卡龙预设的值');
 });

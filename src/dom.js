@@ -34,6 +34,8 @@ import { CAT_ATTR, MARK_ATTR, SCOPE_ATTR } from './css.js';
 const CANDIDATE_SELECTOR = [
   '[data-tool]',
   '[data-variant="think"]',
+  // 过程组标题（"执行了命令"/"已完成分析"）：只有这个属性，没有 data-tool。
+  '[data-process-activity]',
   '[data-kind]',
   '[data-slot]',
 ].join(',');
@@ -51,6 +53,10 @@ const CANDIDATE_SELECTOR = [
  */
 function scopeFor(attrs) {
   if (attrs['data-slot'] !== undefined) return 'tint';
+  // 过程组标题是一个 `<button>`，不是 DisclosureRow，没有折叠表头结构。
+  // 用 `title` 作用域：染它自己的 svg 与标题文字，且**不加竖条**
+  // （用户明确要求：只改颜色，不要彩色竖线）。
+  if (attrs['data-process-activity'] !== undefined) return 'title';
   if (attrs['data-tool'] !== undefined) return 'header';
   if (attrs['data-variant'] === 'think') return 'header';
   if (attrs['data-kind'] !== undefined) return 'self';

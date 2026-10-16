@@ -85,22 +85,6 @@ export function sanitizeColor(value) {
   return trimmed.toUpperCase();
 }
 
-/**
- * 把 6 位十六进制颜色转成 `rgba(...)`。
- *
- * @param hex 合法色值。
- * @param alpha 0–1。
- * @returns `rgba(r, g, b, a)`；色值非法时返回 `transparent`。
- */
-export function withAlpha(hex, alpha) {
-  const clean = sanitizeColor(hex);
-  if (clean === null) return 'transparent';
-  const r = parseInt(clean.slice(1, 3), 16);
-  const g = parseInt(clean.slice(3, 5), 16);
-  const b = parseInt(clean.slice(5, 7), 16);
-  const a = Math.min(1, Math.max(0, Number(alpha)));
-  return `rgba(${r}, ${g}, ${b}, ${a})`;
-}
 
 /**
  * 生成单个类别在一个主题下的规则。
@@ -116,25 +100,38 @@ export function withAlpha(hex, alpha) {
  *
  * 想要更强的效果可以在设置里开 `colorText`（把文字也染色）。
  *
- * ## 四种作用域
+ * ## 只用颜色，不画竖线（用户 2026-10-16 明确要求）
+ *
+ * 早期版本给每个表头画了一条左侧竖条。**已全部移除** —— 用户要求"只改颜色，
+ * 不要彩色竖线"。所以现在的手段只有两条：
+ *
+ * 1. **图标上色**（svg 走 `stroke: currentColor`，给它 `color` 即可）；
+ * 2. **标题文字上色**（"思考" / "执行了命令" / "已读取文件"）。
+ *
+ * ## 五种作用域
  *
  * | scope | 用于 | 效果 |
  * |---|---|---|
- * | `header` | 工具行、推理行 | 表头图标上色 + 表头细竖条（正文在表头外，天然不受影响） |
- * | `self` | 轨迹视图行 | 图标上色 + 细竖条 |
- * | `tint` | UI 控件（权限/模型选择等） | **只给图标上色**，不动文字、不加竖条 |
+ * | `header` | 工具行、推理行 | 表头图标 + 标题上色 |
+ * | `title` | 过程组标题（`data-process-activity`） | 该按钮的图标 + 文字上色 |
+ * | `self` | 轨迹视图行 | 图标 + 标题上色 |
+ * | `tint` | UI 控件（权限/模型选择等） | 图标**与文字**上色 |
  *
- * ⚠️ 曾经的 `stripe` 作用域（用户/助手消息块）已**删除**：实测
- * `data-chat-flow-kind="user"` 挂在**整列宽**的 flowItem 上，而气泡在内部靠右，
- * 于是竖条被画到窗口最左缘、与内容完全脱节 —— 非常难看。这两个类别本身也不在
- * 需求里（需求是思考/工具/命令/文件这类），已整体移除。
+ * ⚠️ 关于 `tint` 染文字：第一版**曾因染文字出事** —— 当时把
+ * `left`/`right`/`overlay` 这些槽也当成控件（它们装的是加号按钮、斜杠命令
+ * 触发器等原生控件），结果弹出的斜杠菜单项被涂灰。现在控件类只保留
+ * `permission`/`model`/`plan`/`activity` 四个**语义明确**的槽，且用户明确要求
+ * "权限选择的那个控件可以把文字颜色也改了"，所以这里恢复染文字是安全的。
+ *
+ * ⚠️ 已删除的 `stripe` 作用域：`data-chat-flow-kind` 挂在**整列宽**的 flowItem
+ * 上，气泡在内部靠右，竖条会被画到窗口最左缘、与内容完全脱节。
  *
  * @param category 类别 id。
  * @param color 该主题下的颜色。
  * @param prefix 选择器前缀（深色主题传 `body[data-ds-dark-theme] `，浅色传空串）。
  *   必须**逐行**加上，不能给整段拼好的字符串加一次 —— 那样只有第一行带前缀，
  *   其余规则会变成无条件生效，深色配色就会在浅色主题下泄漏。
- * @param options.colorText 是否连文字一起染色（默认否）。
+ * @param options.colorText 是否连摘要/正文一起染色（默认否）。
  * @returns CSS 文本。
  */
 function categoryBranch(category, color, prefix = '', options = {}) {
@@ -144,12 +141,10 @@ function categoryBranch(category, color, prefix = '', options = {}) {
 
   // 折叠表头：图标是 svg（宿主用 stroke:currentColor），给它 color 即上色。
   const header = `${p}${sel}[${SCOPE_ATTR}="header"] ${HEADER_SEL}`;
+  // 过程组标题（"执行了命令"）是一个独立 button，没有折叠表头结构。
+  const titleScope = `${p}${sel}[${SCOPE_ATTR}="title"]`;
   const self = `${p}${sel}[${SCOPE_ATTR}="self"]`;
   const tint = `${p}${sel}[${SCOPE_ATTR}="tint"]`;
-
-  // 竖条：3px、高不透明度。早先版本用 2px/55%，实测在真机上几乎看不见
-  // （等于没做），所以这里加强到「一眼能看到、又不抢内容」的程度。
-  const stripe = `inset 3px 0 0 ${withAlpha(color, 0.9)}`;
 
   /**
    * 标题选择器。
@@ -157,33 +152,35 @@ function categoryBranch(category, color, prefix = '', options = {}) {
    * DSH 用 CSS Module，类名形如 `<构建哈希>_<原类名>`（实测 `Ph6Lgq_title`、
    * `ZmL7Ga_title`）。**后缀是稳定的源码类名，只有前缀哈希每次构建会变**，
    * 所以 `[class*="_title"]` 能跨版本命中，比写四层结构选择器可靠得多。
-   *
-   * 限定在 `[data-disclosure-header]` 内，避免误伤详情面板里的 `_titleLabel`
-   * 之类的同名后缀元素。
    */
   const titleSel = `${header} [class*="_title"]`;
 
   const rules = [
-    // ① 图标上色 —— 最稳、最该有色的部分。
+    // ① 工具行/推理行表头：图标 + 短标签。
+    //    **不染摘要与正文** —— 第一版把整段摘要一起染了，满屏紫、层级全丢。
     `${header} svg{color:${color}}`,
-    // ② 短标签上色（"思考" / "执行了命令" / "已读取文件"）。
-    //    只染标题，**不染摘要与正文** —— 第一版把整段摘要一起染了，满屏紫、
-    //    层级全丢，实测非常难看。
     `${titleSel}{color:${color}}`,
-    // ③ 可见的竖条，画在表头容器上（正文在表头之外，不会跟着变）。
-    `${header}{box-shadow:${stripe}}`,
 
-    // 轨迹行：图标 + 标题 + 竖条。
+    // ② 过程组标题（"执行了命令 / 已完成分析 / 已读取文件"）。
+    //    这是用户反馈"运行命令、执行命令、完成分析等条目颜色没有改变"的那批
+    //    —— 它们带 `data-process-activity` 而**不带 `data-tool`**，第一版没覆盖。
+    `${titleScope} svg{color:${color}}`,
+    `${titleScope}{color:${color}}`,
+
+    // ③ 轨迹行：图标 + 标题。
     `${self} svg{color:${color}}`,
     `${self} [class*="_title"]{color:${color}}`,
-    `${self}{box-shadow:${stripe}}`,
 
-    // 控件：只染图标。**不染文字** —— 第一版染了文字，结果斜杠命令菜单的
-    // 菜单项被涂成灰色（菜单挂在 body 上，但触发按钮在插槽里），非常难看。
+    // ④ UI 控件：图标**与文字**一起染。
+    //    ⚠️ 必须命中真正的 button：[data-slot] 包裹层是 `display:contents`
+    //    （renderer 的 ANCHOR_STYLE），且 Button 自己声明了
+    //    `color: var(--dsw-alias-label-primary)` —— 只给包裹层写 color 不生效。
+    //    特异度 (0,3,0) 高于 Button 的 (0,1,0)，所以能覆盖。
     `${tint} svg{color:${color}}`,
+    `${tint} :is(button,[role="button"],a){color:${color}}`,
   ];
 
-  // 可选：连正文/摘要一起染色（默认关，供"我要更花"的场景开启）。
+  // 可选：连摘要/正文一起染色（默认关，供"我要更花"的场景开启）。
   if (wantText) {
     const headerRow = `${header} ${ROW_SEL}`;
     rules.push(
@@ -191,7 +188,6 @@ function categoryBranch(category, color, prefix = '', options = {}) {
       // 覆盖宿主 .row:hover 的 color（同特异度，靠源码顺序在后取胜）。
       `${headerRow}:hover{color:${color}}`,
       `${self}{color:${color}}`,
-      `${tint} :is(button,[role="button"],a){color:${color}}`,
     );
   }
 
