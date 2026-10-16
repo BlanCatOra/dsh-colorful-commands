@@ -209,6 +209,29 @@ function categoryBranch(category, color, prefix = '') {
    */
   const titleSel = `${header} [class*="_title"]`;
 
+  /**
+   * 进度圈的 stroke 规则（2026-10-17 缺陷 ② 的 CSS 侧修法）。
+   *
+   * 内核 `ContextMeter`（`dsh-client-ui-conversation`）的圆环结构（真机取证）：
+   *
+   * ```html
+   * <svg viewBox="0 0 14 14" width="14" height="14">
+   *   <circle class="…_track" cx="7" cy="7" r="5.5"></circle>
+   *   <circle class="…_fill" cx="7" cy="7" r="5.5" stroke-dasharray="…"></circle>
+   * </svg>
+   * ```
+   *
+   * 源码实测：`._zgeDa_fill{fill:none;stroke:var(--dsw-alias-label-tertiary)}`
+   * —— 进度弧是 **stroke 画的**，且 stroke 是**显式 var() 声明、不是 currentColor**。
+   * 所以只写 `svg{color}` 对它完全无效（旧实现的根因），必须显式写 stroke。
+   *
+   * ⚠️ 只染 `_fill`（进度弧），**不染 `_track`**（底环是"剩余量"的示意，
+   * 染成类别色会把圆环变成一整个实心同色环，看不出比例）。
+   * ⚠️ **绝不写 `fill`**：两个 circle 都是 `fill:none`（空心圆环），
+   * 写 fill 会把整个圆盘涂实。
+   */
+  const ringStroke = `${self} svg [class*="_fill"]{stroke:${color}}`;
+
   return [
     // ① 工具行/推理行表头：图标 + 短标签。摘要与正文保持原生。
     `${header} svg{color:${color}}`,
@@ -236,16 +259,25 @@ function categoryBranch(category, color, prefix = '') {
     //    `<button data-turn-process><span class="…_label">` 里，用的类名后缀
     //    是 `_label`（**不是** `_title`）。旧实现照抄 bash 行的 `_title` 判据，
     //    连可见宿主都没找对（它找的是 `visuallyHidden` 的屏幕阅读器副本）。
-    //    ⚠️ `circle` 也在这里：上下文进度圈（`ContextMeter`）是
-    //    `svg{stroke:currentColor}`，给宿主 button 写 color 即可让圆环跟着变 ——
-    //    但**必须先确认是 stroke 而非 fill**（内核源码实测：
-    //    `._zgeDa_fill{fill:none;stroke:var(--dsw-alias-label-tertiary)}`，
-    //    所以写 color 就够了，`svg{color}` 规则会沿继承落到 circle 上）。
+    //    ⚠️ `circle` 也在这里：上下文进度圈（`ContextMeter`）的圆环是
+    //    **stroke 画的**（内核源码实测：`._zgeDa_fill{fill:none;stroke:var(--dsw-alias-label-tertiary)}`，
+    //    `._zgeDa_track{fill:none;stroke:var(--dsw-alias-border-l3)}`）——
+    //    ⚠️⚠️ 这两个 stroke 都是**显式 var() 声明**，不是 currentColor：
+    //    `svg{color}` 对它们完全无效（这正是 2026-10-17 真机取证缺陷 ② 的根因
+    //    —— 只写 color，圆环在所有主题下都纹丝不动）。必须写 **stroke** 规则。
+    //    具体写法（见下方 usage 分支的 ringStroke）：给 `_fill`（进度弧）写
+    //    `stroke:<类别色>`；`_track`（底环）保持内核原样不动 —— 它是"剩余量"，
+    //    染成类别色会让整个圆盘变成实心同色环。
     //    ⚠️ 这里**不能**写成 `] *{`：会连圆环外的百分比文字 span 一起染，
     //    而用户要求的是"进度圈上色"，文字保持原生更稳。
     `${self} svg{color:${color}}`,
     `${self} [class*="_title"]{color:${color}}`,
     `${self} [class*="_label"]{color:${color}}`,
+    // ⚠️⚠️ 进度圈的 stroke 规则（缺陷 ②）：圆环用 stroke 画、且内核显式声明了
+    //    `stroke:var(--dsw-alias-label-tertiary)`（非 currentColor），只写 color
+    //    圆环完全不变色 —— 必须显式写 stroke 命中 `_fill` 那个 circle。
+    //    `svg{color}` 规则**仍然保留**：按钮里的「9%」文字与 hover 图标靠它。
+    ringStroke,
 
     // ④ UI 控件：图标**与文字**一起染。
     //    ⚠️ 必须命中真正的 button：[data-slot] 包裹层是 `display:contents`

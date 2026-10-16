@@ -60,6 +60,10 @@ const zh = {
   //    `data-process-activity` 只留其中一个）。给它中性色，消除"同件事三色"的混乱。
   categorySummary: '混合活动',
   categoryDone: '已完成',
+  // data-turn-process 按钮的另外两种态（失败/中止），与 done 同源：
+  // 内核 `TurnProcessNodeView` 按 reason 换文案，这里按文案分色。
+  categoryTurnError: '处理失败',
+  categoryTurnStopped: '已停止',
   categoryMeta: '消息用量',
   categoryUsageLow: '上下文用量（宽裕）',
   categoryUsageMid: '上下文用量（中等）',
@@ -133,6 +137,8 @@ const en = {
   categoryOther: 'Other tools',
   categorySummary: 'Mixed activities',
   categoryDone: 'Completed',
+  categoryTurnError: 'Failed',
+  categoryTurnStopped: 'Stopped',
   categoryMeta: 'Message usage',
   categoryUsageLow: 'Context usage (low)',
   categoryUsageMid: 'Context usage (medium)',
@@ -171,6 +177,8 @@ export const CATEGORY_KEYS = {
   other: 'categoryOther',
   summary: 'categorySummary',
   done: 'categoryDone',
+  turnError: 'categoryTurnError',
+  turnStopped: 'categoryTurnStopped',
   meta: 'categoryMeta',
   usageLow: 'categoryUsageLow',
   usageMid: 'categoryUsageMid',

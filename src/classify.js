@@ -282,6 +282,47 @@ function isEmptyActionsRow(attrs) {
 }
 
 /**
+ * 按可见文本把 `data-turn-process` 按钮分到四种态。
+ *
+ * ## 真机 + 内核源码双重确认（2026-10-17，CC-FINDINGS §① 末尾）
+ *
+ * 内核 `dsh-client-ui-chat` 的 `TurnProcessNodeView`（提取件 7428 行）：
+ *
+ * ```js
+ * const label = reason === "aborted" ? t("message.stopped")
+ *              : reason === "error"   ? t("message.turnProcess.failed")
+ *              : duration === void 0 ? t("message.turnProcess.worked")
+ *              :                       t("message.turnProcess.took");
+ * ```
+ *
+ * 文案四态（zh / en，均为内核 locale 字面量）：
+ *
+ * | 态 | 中文 | 英文 | 类别 |
+ * |---|---|---|---|
+ * | 正常完成（有时长） | `已完成，用时 ` | `Completed in ` | `done` |
+ * | 完成（无时长） | `已完成` | `Completed` | `done` |
+ * | 失败 | `处理失败` | `Failed` | `turnError` |
+ * | 中止 | `已停止` | `Stopped` | `turnStopped` |
+ *
+ * 旧实现按 `data-turn-process` 一律返回 `done`（绿）—— 失败/中止的行也会变绿，
+ * 语义正好相反。这里改按**可见文本**（`_label` span 的文字）区分。
+ *
+ * ⚠️ `reason` 不落在 DOM 属性上（只在 React props 里），所以只能靠文案判定。
+ * ⚠️ 文案前缀匹配即可：`已完成，用时 27分8秒` 是 label + 时长分片拼在同一个
+ *    `_label` span 里（真机取证确认），前缀判据天然覆盖。
+ *
+ * @param text 按钮的可见文本（`_label` 的 textContent，或整按钮文本）。
+ * @returns 四态类别 id；文本不可读时退回 `done`（保守：这是最常见的态，
+ *   且空文本只会出现在无法读 DOM 的退化环境里，此时保底着色优于完全不着色）。
+ */
+export function turnProcessCategory(text) {
+  const t = typeof text === 'string' ? text : '';
+  if (t.includes('处理失败') || t.includes('Failed')) return 'turnError';
+  if (t.includes('已停止') || t.includes('Stopped')) return 'turnStopped';
+  return 'done';
+}
+
+/**
  * 是否为消息尾部/过程区的「已完成 · 用时 xxx」状态元素。
  *
  * ## 真机结构（2026-10-17 **读内核源码**核实，比 DOM 探针更权威）
@@ -503,7 +544,11 @@ export function classifyAttrs(attrs, options = {}) {
   //     ⚠️ 先判进度圈（它读 aria-label 分档），再判通用的 meta 容器。
   // 0a-0. 「已完成 · 用时 xxx」的**可见**宿主（`data-turn-process`，内核源码确认）。
   //       必须排在 turn-tail 容器之前判：容器是它的祖先，两者都会被扫到。
-  if (isTurnTailStatus(a)) return 'done';
+  //
+  // ⚠️⚠️ **必须按可见文案分四态**，不能一律返回 `done`：
+  //       同一个按钮在失败时显示「处理失败」、中止时显示「已停止」。
+  //       全染绿色会让失败行也变成成功色，与用户语义预期相反（取证 §① 末尾）。
+  if (isTurnTailStatus(a)) return turnProcessCategory(options.text);
   // 0a-1. ⚠️⚠️ **上下文进度圈按钮**（缺陷 ② 的真正修法）。
   //
   //       真机 + 内核源码（`dsh-client-ui-conversation` 的 `ContextMeter`）：
@@ -538,7 +583,7 @@ export function classifyAttrs(attrs, options = {}) {
   if (isEmptyActionsRow(a)) {
     const usage = usageCategory(options.usageText);
     if (usage !== null) return usage;
-    if (isTurnTailStatus(a)) return 'done';
+    if (isTurnTailStatus(a)) return turnProcessCategory(options.text);
     return 'meta';
   }
 

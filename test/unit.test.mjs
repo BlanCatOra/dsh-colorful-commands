@@ -225,6 +225,11 @@ test('分类表覆盖全部可配置类别（防止加了类别却忘了映射�
     // ⚠️ 2026-10-17 缺陷 ① 修完后，这里已从「class 含 visuallyHidden +
     //    role=status」（视觉隐藏副本，给它上色用户看不见）改成语义化属性。
     classifyAttrs({ 'data-turn-process': '22', class: 'Lu6X2a_root' }),
+    // ⚠️ 同一个按钮在失败/中止时显示「处理失败」「已停止」（取证 §① 末尾）。
+    // 若一律染绿，失败行也变成成功色 —— 语义相反。
+    // 必须用**带 text 的真实输入**证明这两档可达。
+    classifyAttrs({ 'data-turn-process': '22' }, { text: '处理失败' }),
+    classifyAttrs({ 'data-turn-process': '22' }, { text: '已停止' }),
     classifyAttrs({ 'data-composer-dock': 'true' }),
     // 上下文进度圈四档：百分比**只写在 aria-label 里**（真机
     // `aria-label="上下文已用 29%"`）。四个区间各取一个真实值。
@@ -784,6 +789,25 @@ test('缺陷②：进度圈按分档生成四组 CSS，且都作用在 self 上'
     assert.ok(
       /\[data-cc-scope="self"\] svg\{color:/.test(css),
       `${tier} 必须通过 self 作用域给 svg 上色（进度圈是 svg stroke）`,
+    );
+  }
+});
+
+test('缺陷②：进度圈必须显式写 stroke，且禁用 tokens 药丸上色', () => {
+  // ⚠️⚠️ 这条是补的**真断言**。此前只有 `svg{color}` 的断言，
+  // 而实测（2026-10-17）那对 `svg{color}` 删掉 stroke 规则**测试仍然全绿** ——
+  // 说明旧断言是陪跑：它证明不了"进度圈真的能变色"。
+  //
+  // 根因（内核源码 `dsh-client-ui-conversation` 的 `ContextMeter` 实测）：
+  //   `._zgeDa_fill{fill:none;stroke:var(--dsw-alias-label-tertiary)}`
+  // 进度弧的 stroke 是**显式 var() 声明，不是 currentColor** ——
+  // 所以只给 `color` 对它**完全无效**，必须显式写 `stroke`。
+  const tiers = ['usageLow', 'usageMid', 'usageHigh', 'usageCritical'];
+  for (const tier of tiers) {
+    const css = buildStylesheet({ [tier]: { light: '#3F7A4A', dark: '#7EC08C' } });
+    assert.ok(
+      new RegExp(`\\[${CAT_ATTR}="${tier}"\\]\\[data-cc-scope="self"\\] svg \\[class\\*="_fill"\\]\\{stroke:`).test(css),
+      `${tier} 必须显式写 stroke 规则 —— 只写 color 对 stroke 画的进度弧无效`,
     );
   }
 });

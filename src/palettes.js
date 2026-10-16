@@ -90,6 +90,14 @@ const STATUS_COLORS = {
   // 取偏冷的墨绿 `#2F6B4F`（浅）/ `#7FC49B`（深）—— 与内容区 `write` 的
   // 正绿（150°）明显不同（这里是 152° 但更暗更灰），且不是命令区的红色系。
   done: { light: '#2F6B4F', dark: '#7FC49B' },
+  // 「处理失败」/「已停止」：data-turn-process 按钮的另外两种态（内核源码
+  // `TurnProcessNodeView`：reason=error → 处理失败；reason=aborted → 已停止）。
+  // ⚠️ 与 done 同一张表、同样固定色值（理由同上：状态色不参与色库选色）。
+  // 配色约束：用户三次强调"不要太鲜艳抢眼" —— 饱和度压到与 done(≈40)同档，
+  // 失败用暗哑砖红（与命令区 commandHigh 的正红拉开），中止用低饱和暖灰橙
+  //（读作"中性收尾"，不与 usageHigh 的警示橙混淆）。
+  turnError: { light: '#8A3A34', dark: '#C98A80' },
+  turnStopped: { light: '#7A655A', dark: '#B09A8C' },
   // 尾部用量数字 / 分支按钮：信息性，低饱和石板蓝灰，"存在但不抢戏"。
   meta: { light: '#5A6B7C', dark: '#8FA3B5' },
   // 上下文进度圈四档：<35 绿 → 35-49 黄 → 50-67 橙 → >=68 红。

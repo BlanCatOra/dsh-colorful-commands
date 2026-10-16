@@ -76,6 +76,16 @@ export const CATEGORIES = [
   //
   // ⚠️ `done` 命中消息尾部的「已完成 · 用时 xxx」。用户明确要求用成功色（绿色系）。
   'done',
+  // ⚠️⚠️ `data-turn-process` 按钮（`TurnProcessNodeView`）有**四种态**（内核源码
+  //    7428 行：label 由 `turn.end.data.reason.kind` 决定），不能一律染绿：
+  //      reason=正常 + duration → 「已完成，用时 xxx」 → done（绿，用户要求）
+  //      reason=正常 无 duration → 「已完成」          → done
+  //      reason=error           → 「处理失败」          → turnError（红系）
+  //      reason=aborted         → 「已停止」            → turnStopped（橙灰系）
+  //    旧实现按 data-turn-process 一律返回 done，失败/中止的行也变绿 ——
+  //    语义正好相反。判据见 classify.js 的 turnProcessCategory（按可见文本）。
+  'turnError',
+  'turnStopped',
   // 消息尾部的用量数字 / 分支按钮。用户要求上色但"不要太鲜艳抢眼"，
   // 且明确排除底部 tokens 数字（那一处走 plain，不染）。
   'meta',
