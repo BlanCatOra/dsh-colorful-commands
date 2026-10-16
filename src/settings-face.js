@@ -27,6 +27,26 @@ import { presetColors } from './palettes.js';
 import { ALL_CATEGORIES } from './constants.js';
 
 /**
+ * 剥掉 volatile 活引用（Host 侧 schema 用 .volatile() 包装的字段）。
+ * ⚠️ 刻意在本文件内联实现，**不从 Host 侧配置模块引入** ——
+ * 那个 Host 侧模块依赖只被 index.js 引用，
+ * 而本模块会打进浏览器 bundle，只有 seed 表那 9 个模块允许被 require；
+ * 引入它会触发 src/build-client.mjs 的 assertBundleShape() 构建失败，
+ * 真机表现是整站白屏 + import failed（无堆栈）。
+ *
+ * 语义与 Host 侧同名的 unwrapVolatile 完全一致（照抄实现）。
+ *
+ * @param value 可能是活引用的值。
+ * @returns 真实值。
+ */
+export function unwrapVolatile(value) {
+  if (value !== null && typeof value === 'object' && typeof value.get === 'function') {
+    return value.get();
+  }
+  return value;
+}
+
+/**
  * 从 scope 快照里读出配置值。
  *
  * ⚠️ 快照形状（内核实测）：`{ status, value, base, user, revision, writable, mode }`。
@@ -37,10 +57,15 @@ import { ALL_CATEGORIES } from './constants.js';
  */
 export function readConfig(snapshot) {
   const value = snapshot?.value ?? {};
-  const colors = value.colors;
+  // volatile 字段在 scope 快照里是 `{ get() }` 活引用，读前剥一层。
+  // 参考 ~/.dsh/profiles/desktop/node_modules/dsh-enhanced-prompt-editor/src/settings-face.js
+  // 的 unwrap / unwrapDeep：typeof value.get === 'function' → value.get()，幂等。
+  const enabled = unwrapVolatile(value.enabled);
+  const preset = unwrapVolatile(value.preset);
+  const colors = unwrapVolatile(value.colors);
   return {
-    enabled: value.enabled !== false,
-    preset: typeof value.preset === 'string' ? value.preset : 'chinese',
+    enabled: enabled !== false,
+    preset: typeof preset === 'string' ? preset : 'chinese',
     colors: colors !== null && typeof colors === 'object' ? { ...colors } : {},
   };
 }

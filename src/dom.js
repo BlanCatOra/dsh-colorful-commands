@@ -55,6 +55,16 @@ const CANDIDATE_SELECTOR = [
   '[data-sample]',
   '[data-tool]',
   '[data-variant="think"]',
+  // ⚠️⚠️ 压缩**进行中**的命令行（`GenericCommandCard`）根元素是
+  //    `<div data-variant="others" data-state="running">`（内核源码已确认）。
+  //    它**只有这两个语义化属性、没有 `_compaction*` 类名**，所以不在这里补一条
+  //    就永远进不了候选集——这正是"③ 压缩进行中那一行没有上色"的**第二层根因**
+  //    （第一层是 isRunningCompaction 找错了元素，已修）。
+  //    注意：只认 `data-variant="others"` 会把所有未结算斜杠命令都捞进来，但
+  //    isRunningCompaction 内部再用 `data-state="running"` + summary 文本双重把关，
+  //    绝不会误染 `/clear` 等普通命令（它们的 data-state 是 ok/failed/error，
+  //    或 summary 不是「正在压缩…」）。
+  '[data-variant="others"]',
   // 过程组标题（"执行了命令"/"已完成分析"）：只有这个属性，没有 data-tool。
   '[data-process-activity]',
   '[data-kind]',

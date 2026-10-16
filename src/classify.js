@@ -478,29 +478,90 @@ export function isCompactionRow(attrs) {
  *
  * | 阶段 | 组件 | 根元素 |
  * |---|---|---|
- * | 压缩**进行中**（`compaction === null`） | `GenericCommandCard` | `data-variant="others"` + 标题 `compact` |
+ * | 压缩**进行中**（`compaction === null`） | `GenericCommandCard` | `data-variant="others"` + `data-state="running"` |
  * | 压缩**已完成** | `CompactionItem` | `class="…_compactionRow"` |
  *
  * 第一版只覆盖了后者（靠 `_compactionRow` 类名），于是用户看到
  * "压缩的上色只在压缩完成后才上色 压缩中没有上色"。
  *
- * 进行中这一行走的是通用命令卡片，`data-variant="others"` 是**所有**斜杠命令
- * 共用的（不能据此判定），所以改用**标题文字**识别：内核把
- * `message.compaction.commandTitle` 硬编码为字面量 `"compact"`（实测），
- * 而 `.title` 元素是独立的一个 span，文本恰好就是这个标题。
+ * ## 旧判据为什么错（内核 `GenericCommandCard` 源码已定）
+ *
+ * 旧实现取 `[class*="_title"]` 并比对 `textContent === 'compact'`。
+ * 但内核源码（chat-client.js 7218 行）：
+ *
+ *     const title = node.name ?? t("command.title");
+ *
+ * 即 `title` 来自 `node.name`，**不保证是 `compact`**——任何未命名斜杠命令
+ * （`/clear` 等）的 `title` 都是命令名本身。只有在**已完成**的 `CompactionItem`
+ * 里，标题才被硬编码成字面量 `compact`（真机已证：`_6zCWQq_compactionTitle`
+ * 文本就是 `compact`），而那时走的是 `isCompactionRow` 的类名钩子，根本不会
+ * 进这里。
+ *
+ * 真正的"正在压缩…"在 `collapsedContent` 里：
+ *
+ *     <span className={css.summary} data-error={...}>
+ *       <TextShimmer>{summary}</TextShimmer>   // summary = runningSummary = t("message.compaction.running")
+ *     </span>
+ *
+ * 即 `[class*="_summary"]`（CSS Module 类 `gfznJG_summary`，chat-client.js 7198 行）。
+ * 根元素是 `<div className={css.root} data-variant="others" data-state={state}>`
+ * （7219 行 `state = stateOf(node.outcome)`，且 `outcome === null` 时
+ * `stateOf` 返回 `"running"`，见 7205-7208 行）。
+ *
+ * ## 判据（已用内核源码确认）
+ *
+ * 1. `data-variant === 'others'` **且** `data-state === 'running'`；
+ * 2. 内部 `[class*="_summary"]` 的文本命中「正在压缩」或 `Compacting context`。
+ *
+ * ⚠️ **必须叠加文本判据**：`data-variant="others"` + `data-state="running"` 是
+ * **所有未结算斜杠命令**共用的（真机抓到过
+ * `DIV{class="Ph6Lgq_root" data-variant="others" data-tool="subagent" data-state="ok"}`，
+ * 注意它 `state="ok"` 已被第一道挡掉；但万一以后出现 `state="running"` 的非压缩命令，
+ * 没有文本判据就会误染）。
+ *
+ * ## TextShimmer 陷阱：可见文本到底在哪（已读 primitives 源码确认）
+ *
+ * `GenericCommandCard` 调用的是 `<TextShimmer>{summary}</TextShimmer>`（7233 行），
+ * **没有传 `active`**。`TextShimmer`（primitives-index.js 3130 行）默认
+ * `active = false`，于是：
+ *
+ * - 走 `useContext(DecorativeCopy) !== void 0` 分支外层（false）→
+ *   渲染 `jsx(TextContent, { children })`（`children` 是 summary 字符串）；
+ * - `TextContent`（3114 行）：`generated = useContext(DecorativeCopy) === true` 为 false
+ *   （外层 Provider value=false），所以 `children: generated ? null : children`
+ *   → **直接渲染 summary 字符串作为可见文本**，`data-shimmer-text` 属性为 void（不设）。
+ *
+ * 结论：**可见文本就在 `summary` span 的 `textContent` 里**，`data-shimmer-text`
+ * 那条装饰副本路径不触发。判据只需读 `textContent` 即可。
+ *
+ * ⚠️ 反例对照（其它 running 行**会**传 `active`，但都不在压缩行这条路径上）：
+ * - 深潜行 `chat.deepDiving`：`<TextShimmer active:true>`（chat-client.js 6429 行）；
+ * - 重试状态：`<TextShimmer active={active}>`（6098 行）；
+ * - 进程卡片标题：`<TextShimmer active={!data.closed}>`（4912 行）。
+ * 这些当 `active` 为真时会额外渲染一个 `aria-hidden inert` 的装饰副本，其
+ * `data-shimmer-text` 属性载着文本、可见者 `children` 为 null。**但压缩进行中这一行
+ * 明确不传 `active`**，所以不受影响。为稳妥，本判据**只读可见 textContent**
+ * （装饰副本 `aria-hidden` 又 `inert`，本就不会进候选集，更不会被 `querySelector`
+ * 误取——且它不含 `_summary` 类名）。
  *
  * @param element 候选元素。
  * @param attrs 属性快照。
  * @returns 是否为进行中的压缩命令行。
  */
 export function isRunningCompaction(element, attrs) {
-  // 只认"通用命令卡片"这一形状，避免误伤别的行。
+  // 1. 必须是通用命令卡片进行中形态：data-variant="others" + data-state="running"。
+  //    data-state 不在 attrs 快照默认清单里（readAttrs 未读它），所以这里**直接读
+  //    element 属性**，attrs 作快速初筛。
   if (attrs?.['data-variant'] !== 'others') return false;
   try {
+    if (typeof element?.getAttribute !== 'function') return false;
+    if (element.getAttribute('data-state') !== 'running') return false;
     if (typeof element.querySelector !== 'function') return false;
-    const title = element.querySelector('[class*="_title"]');
-    if (title === null) return false;
-    return title.textContent === 'compact';
+    // 2. 内部必须有 _summary 承载"正在压缩…"的状态文字。
+    const summary = element.querySelector('[class*="_summary"]');
+    if (summary === null) return false;
+    const text = summary.textContent ?? '';
+    return text.includes('正在压缩') || text.includes('Compacting context');
   } catch {
     return false;
   }
@@ -592,8 +653,20 @@ export function classifyAttrs(attrs, options = {}) {
   if (isRetryRow(a)) return 'retry';
   if (isCompactionRow(a)) return 'compaction';
   //    ⚠️ 压缩**进行中**走的是另一个组件（GenericCommandCard），类名里没有
-  //    `compaction`，必须靠标题文字 `compact` 认（见 isRunningCompaction）。
-  if (isRunningCompaction(options.element, a)) return 'compaction';
+  //    `compaction`，靠 `data-variant="others"` + `data-state="running"` + `_summary`
+  //    文本识别（见 isRunningCompaction）。
+  //    ⚠️ 守卫：只有「进行中的压缩行」才从这里染；其余 `data-variant="others"`
+  //    的斜杠命令（/clear 等）一律返回 null（不着色）。原因：内核源码里**所有**
+  //    未结算斜杠命令都共用 `data-variant="others"`，DOM 上没有任何更窄的钩子；
+  //    而 `VARIANT_CATEGORY['others']='other'` 这条映射此前因**没有对应候选选择器**
+  //    而从未被触发（死映射）。若这里不拦、任其落到 `'other'`，就会把 /clear 等
+  //    普通命令整片染成 other 色——这是用户没要求的副作用，会污染整屏。
+  //    所以：命中 running-compaction → `compaction`；其余 others → `null`（与改动前
+  //    这些命令"未被候选、不着色"的行为一致）。
+  if (a['data-variant'] === 'others') {
+    if (isRunningCompaction(options.element, a)) return 'compaction';
+    return null;
+  }
 
   // 1. 插槽锚点优先：控件类与内容类不重叠，先判更具体的。
   const slot = a['data-slot'];

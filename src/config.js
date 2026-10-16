@@ -58,9 +58,9 @@ const presetSchema = z.union([
  * 上色、上色部分太多"，所以"染正文"这条路整个去掉了 —— 只染图标与短标签。
  */
 export const Config = z.object({
-  enabled: z.boolean().default(true).description('是否启用着色'),
-  preset: presetSchema.default('chinese'),
-  colors: colorsSchema.default({}),
+  enabled: z.boolean().default(true).description('是否启用着色').volatile(),
+  preset: presetSchema.default('chinese').volatile(),
+  colors: colorsSchema.default({}).volatile(),
 });
 
 /**

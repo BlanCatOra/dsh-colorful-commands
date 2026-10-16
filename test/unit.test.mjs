@@ -668,13 +668,40 @@ test('每个作用域都必须给 svg 上色（漏掉就会出现"文字有色�
 });
 
 
-test('others 通用命令卡片：只有标题是 compact 时才算压缩', () => {
+test('others 通用命令卡片：旧判据已废（标题文字不再是压缩判据）', () => {
+  // ⚠️⚠️ 这条断言在 2026-10-17 被**证伪并改写**，别按旧版"修回去"。
+  //
+  // 旧版断言的是：「`[class*="_title"]` 的文本 === 'compact' 才算压缩」。
+  // 内核源码（chat-client.js 7218）证明那是错的：
+  //
+  //     const title = node.name ?? t("command.title");
+  //
+  // `title` 来自 `node.name`，**不保证是 `compact`**；而"正在压缩…"根本不在
+  // `_title` 里，它在 `collapsedContent` 的 `[class*="_summary"]`（7233 行）。
+  // 只要把旧断言的 fixture 换成真机形状，它就会红 —— 详见本轮取证结论。
+  //
+  // 现在的正确判据在 `isRunningCompaction()`：`data-state="running"` +
+  // `_summary` 文本命中「正在压缩」/`Compacting context`。
+  // 本文件只保留**旧路径不再误判**的守卫；正向判据由
+  // `test/actions-compaction.test.mjs` 覆盖（那边有完整的真机形状 fixture）。
   const mk = (title) => ({ querySelector: (sel) => (sel.includes('_title') ? { textContent: title } : null) });
-  assert.equal(classifyAttrs({ 'data-variant': 'others' }, { text: '正在压缩…', element: mk('compact') }), 'compaction');
-  assert.equal(classifyAttrs({ 'data-variant': 'others' }, { text: '正在清空…', element: mk('clear') }), 'other');
+
+  // 只有 `_title`（旧形状、无 data-state、无 _summary）时**不得**再判成 compaction
+  // —— 因为真实内核的进行中压缩行走的不是这个形状。
+  // ⚠️ 与 `actions-compaction.test.mjs` 的判据一致：进行中压缩行**必须**带
+  //    `data-state="running"` + 内部 `_summary` 文本命中「正在压缩」；
+  //    其余 `data-variant="others"` 的斜杠命令（/clear 等）返回 **null**（不着色），
+  //    **不**回落到 `other`——否则会激活 `VARIANT_CATEGORY['others']='other'` 这条
+  //    死映射，把所有斜杠命令整片染成 other 色（用户没要求的副作用，会污染整屏）。
+  assert.equal(
+    classifyAttrs({ 'data-variant': 'others' }, { text: '正在压缩…', element: mk('compact') }),
+    null,
+    '旧判据（_title === compact）已废：不得仅凭标题文字判压缩',
+  );
+  assert.equal(classifyAttrs({ 'data-variant': 'others' }, { text: '正在清空…', element: mk('clear') }), null);
   // 没有 element / querySelector 时必须安全退回，不能抛错。
-  assert.equal(classifyAttrs({ 'data-variant': 'others' }, { text: 'x' }), 'other');
-  assert.equal(classifyAttrs({ 'data-variant': 'others' }, { text: 'x', element: {} }), 'other');
+  assert.equal(classifyAttrs({ 'data-variant': 'others' }, { text: 'x' }), null);
+  assert.equal(classifyAttrs({ 'data-variant': 'others' }, { text: 'x', element: {} }), null);
 });
 
 test('聚合过程组标题必须走中性 summary，不得跟随单一活动变色', () => {

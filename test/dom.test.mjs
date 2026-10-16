@@ -782,11 +782,14 @@ test('非 bash 的"命令类"行不得去读 fiber（否则会被别人的 block
 // ── 压缩进行中（"压缩中没有上色"）────────────────────────────────────
 //
 // ⚠️ `/compact` 这一行在内核里分两段渲染、用的是**不同组件**：
-//   进行中 → GenericCommandCard（`data-variant="others"`，标题字面量 `compact`）
+//   进行中 → GenericCommandCard（`data-variant="others"` + `data-state="running"`，
+//            状态文字「正在压缩…」在 `_summary` 里）
 //   已完成 → CompactionItem（`class="…_compactionRow"`）
 // 第一版只覆盖了后者，于是"压缩的上色只在压缩完成后才上色"。
+// 进行中这一行的识别依据（内核源码已定）：`data-variant="others"` + `data-state="running"`
+// + 内部 `[class*="_summary"]` 文本命中「正在压缩」/「Compacting context」。
 
-test('压缩进行中：靠标题字面量 compact 识别（此时类名里没有 compaction）', () => {
+test('压缩进行中：靠 _summary 文本「正在压缩…」识别（此时类名里没有 compaction）', () => {
   const doc = makeFakeDoc();
   const root = doc.createElement('div');
   root.setAttribute('data-variant', 'others');
@@ -807,7 +810,7 @@ test('压缩进行中：靠标题字面量 compact 识别（此时类名里没�
   assert.equal(root.getAttribute(SCOPE_ATTR), 'plain', '进行中的压缩行必须整行染（含 _summary）');
 });
 
-test('压缩进行中：别的斜杠命令不得被误判成 compression', () => {
+test('压缩进行中：别的斜杠命令不得被误判（标题不是 compact 也无 _summary 压缩文本）', () => {
   const doc = makeFakeDoc();
   const root = doc.createElement('div');
   root.setAttribute('data-variant', 'others');
@@ -816,8 +819,11 @@ test('压缩进行中：别的斜杠命令不得被误判成 compression', () =>
   title.textContent = 'clear';
   root.appendChild(title);
 
-  assert.equal(tagElement(root), 'other', '通用命令卡片不得被误判为 compaction');
-  assert.equal(root.getAttribute(SCOPE_ATTR), 'header', '普通命令卡片仍用 header（不染结果详情）');
+  // 内核里 /clear 等其它斜杠命令共用 `data-variant="others"`，但既无
+  // `data-state="running"`、也无「正在压缩」的 _summary 文本 → 不得被染
+  // （返回 null），否则会污染整屏。判据已由 isRunningCompaction 的
+  // data-state + _summary 文本双重把关。
+  assert.equal(tagElement(root), null, '其它斜杠命令不得被误判为 compaction，也不该被染');
 });
 
 test('bash 行：命令原文还没读到时**不得冻结**，读到后必须纠正档位', () => {
