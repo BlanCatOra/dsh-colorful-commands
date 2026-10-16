@@ -205,7 +205,13 @@ async function assertBundleMatchesSource() {
       readFile(freshPath, 'utf8'),
       readFile(join(here, '..', 'lib', 'client.js'), 'utf8'),
     ]);
-    if (onDisk === fresh) return;
+    // ⚠️ 构建时间戳每次构建都不同，逐字节比对必然失败。先把两边的
+    // `__CC_BUILD_STAMP__` 行归一成同一个占位符，再比其余内容。
+    const stripStamp = (code) => code.replace(
+      /globalThis\.__CC_BUILD_STAMP__ = "[^"]*"/g,
+      'globalThis.__CC_BUILD_STAMP__ = "STAMP"',
+    );
+    if (stripStamp(onDisk) === stripStamp(fresh)) return;
     const firstDiff = [...onDisk].findIndex((char, index) => char !== fresh[index]);
     assert.fail(
       'lib/client.js 与 src/ 不同源（产物过期）——先跑 `node src/build-client.mjs`。' +

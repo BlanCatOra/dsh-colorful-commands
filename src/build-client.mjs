@@ -273,6 +273,11 @@ export async function build({ entry, root, packageId, output, banner = '' }) {
   parts.push('\t\treturn module.exports;');
   parts.push('\t},');
   parts.push('});');
+  // 构建时间戳：写进产物，运行时可从启动报告里读出来。
+  // ⚠️ 为什么需要它：pnpm 硬链接 + 插件热重载的组合下，「我改了代码」和
+  // 「用户看到的还是旧行为」之间无法区分 —— 排查时只能猜。有了时间戳，
+  // 一条 probe 就能确认 app 跑的到底是哪份 bundle。
+  parts.push(`\t\tglobalThis.__CC_BUILD_STAMP__ = ${JSON.stringify(new Date().toISOString())};`);
   const code = `${parts.join('\n')}\n`;
   // 产物形状守卫：语法 + seed 表白名单。放在写盘之前，坏产物不落盘。
   const shape = assertBundleShape(code);
