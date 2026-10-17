@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Colorful Commands",
+    "description": "Colors conversation rows by activity category, with three command risk tiers read from the actual command text, three traditional-color presets, and per-category light and dark overrides."
+  }
+}

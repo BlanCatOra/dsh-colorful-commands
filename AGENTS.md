@@ -7,6 +7,24 @@
 
 ---
 
+## 0. 本仓库在多插件工作区里的位置
+
+本机有一个多插件工作区 `~/Projects/dsh-plugin`，**本仓库以软链形式挂在里面**：
+
+| 位置 | 是什么 |
+|---|---|
+| `~/Projects/dsh-colorful-commands` | **真身** —— git 仓库在这里，所有改动都落在这里 |
+| `~/Projects/dsh-plugin/plugins/dsh-colorful-commands` | **软链** → 指向真身 |
+
+⚠️ 三条要点：
+
+1. **软链是单向的**：改真身，软链跟着变；反过来如果有人在软链路径下新建 git 仓库/提交，
+   会出现"两份历史"，非常难收拾。**永远在真身路径下操作 git**。
+2. 有些会话的默认 cwd 是 `~/Projects/dsh-plugin`（工作区根），**不代表仓库搬走了** ——
+   源码真身仍在 `~/Projects/dsh-colorful-commands`。
+3. 跑构建/测试前先 `pwd` 确认路径。在软链目录里跑 `npm run build` 本身没问题（真身会被更新），
+   但如果你在别处又 `cp` 了一份 `lib/client.js`，就会出现"两份产物不同步"的假故障。
+
 ## 1. 验证（改完必须跑这条）
 
 ```sh
