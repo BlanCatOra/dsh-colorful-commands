@@ -14,7 +14,7 @@ import {
   readAttrs,
   _tables,
 } from '../src/classify.js';
-import { buildStylesheet, resolveColors, sanitizeColor, scopedPreviewCss, CAT_ATTR, SCOPE_ATTR } from '../src/css.js';
+import { buildStylesheet, resolveColors, sanitizeColor, CAT_ATTR, SCOPE_ATTR } from '../src/css.js';
 import { presetColors, presetColorFor, presetCoverage } from '../src/palettes.js';
 import { CHINESE_COLORS } from '../src/data/chinese-colors.js';
 import {
@@ -662,7 +662,14 @@ test('每个作用域都必须给 svg 上色（漏掉就会出现"文字有色�
   for (const m of css.matchAll(/\[data-cc-scope="([^"]+)"\]/g)) scopes.add(m[1]);
   assert.ok(scopes.size >= 4, `作用域数量异常：${[...scopes].join(', ')}`);
   for (const scope of scopes) {
-    const hasSvg = new RegExp(`\\[data-cc-scope="${scope}"\\][^{]*svg\\{color:`).test(css);
+    // ⚠️ 选择器里 `svg` 与 `{color:` 之间**允许出现 `:not(...)`** ——
+    //    例如 `actions` 作用域要排除"复制/点赞/点踩"所在的插槽
+    //    （`:not([data-slot="conversation.chat.assistant-actions"] *)`），
+    //    那是用户 2026-10-17 的明确要求。旧正则是 `svg\{color:`，
+    //    把这个正常的排除写法误判成"缺 svg 规则"。
+    //    这里放宽为"`svg` 之后、`{` 之前可以有任意非 `{` 字符"，
+    //    仍然能抓住真正的问题（整个 svg 规则缺失）。
+    const hasSvg = new RegExp(`\\[data-cc-scope="${scope}"\\][^{]*svg[^{]*\\{color:`).test(css);
     assert.ok(hasSvg, `作用域 ${scope} 缺少 svg 规则 → 该作用域下图标不会上色`);
   }
 });

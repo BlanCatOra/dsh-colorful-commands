@@ -32,8 +32,9 @@ const zh = {
   resetOne: '恢复预设值',
   resetAll: '全部恢复预设值',
 
-  previewTitle: '预览',
-  previewHint: '下面用当前配色实际渲染一次，改色即时可见。',
+  // ⚠️ previewTitle / previewHint 已随「预览」区块一起删除
+  //    （用户 2026-10-17：「设置里的这个预览删掉 有bug 懒得修」）。
+  //    不要再加回来，除非同时重新实现预览组件。
 
   save: '保存',
   discard: '放弃修改',
@@ -111,8 +112,9 @@ const en = {
   resetOne: 'Reset to preset',
   resetAll: 'Reset all to preset',
 
-  previewTitle: 'Preview',
-  previewHint: 'Rendered with the current palette, so edits are visible immediately.',
+  // ⚠️ previewTitle / previewHint removed together with the Preview block
+  //    (user 2026-10-17: "delete this preview in settings, it has bugs").
+  //    Do not re-add unless the preview component is reimplemented.
 
   save: 'Save',
   discard: 'Discard',

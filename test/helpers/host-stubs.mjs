@@ -22,6 +22,11 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const stubs = {
   'react': fileURLToPath(new URL('./stub-react.mjs', import.meta.url)),
   '@deepseek-ai/dsh-client-store': fileURLToPath(new URL('./stub-store.mjs', import.meta.url)),
+  // ── 2026-10-17 扩充：settings-card.js 的顶层依赖 ──
+  // 它的 swatchesFor() 也要单测（纯函数），而该模块顶层还 import 了
+  // react/jsx-runtime 与 primitives。同样只提供具名导出即可。
+  'react/jsx-runtime': fileURLToPath(new URL('./stub-jsx-runtime.mjs', import.meta.url)),
+  '@deepseek-ai/dsh-client-ui-primitives': fileURLToPath(new URL('./stub-primitives.mjs', import.meta.url)),
 };
 
 export async function resolve(specifier, context, next) {

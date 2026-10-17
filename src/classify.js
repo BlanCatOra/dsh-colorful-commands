@@ -391,51 +391,161 @@ function isTurnTailStatus(attrs) {
  * 聚合摘要**没有单一语义**，所以判成中性的 `summary` 类别（低饱和一级灰蓝），
  * 与内容行的彩色形成层级：单个活动保持语义色，混合活动统一弱化。
  *
- * 判定方式：标题里出现 `"、"`（内核拼接多个活动用的分隔符）或 `"，"`，
- * 且去重后仍有多个不同的活动名 —— 单纯一个活动名（"执行了命令"）不算聚合。
+ * ## ⚠️⚠️ 连接形式有三种，只认「、」「，」会漏掉一半（2026-10-17 修正）
+ *
+ * 内核 `dsh-client-ui-chat` 把多个活动拼成标题时有**三条分支**
+ * （`chat-client.js` 4636-4645 行）：
+ *
+ * ```js
+ * if (labels.length === 2) return t("message.stepProcess.joinTwo", { first, second });
+ * const title = [first, ...labels.slice(1).map(continuation)].join(t("message.stepProcess.comma"));
+ * return summary.counts.length > 3 ? t("message.stepProcess.more", { title }) : title;
+ * ```
+ *
+ * 对应文案（zh / en）：
+ *
+ * | key | zh | en | 何时用 |
+ * |---|---|---|---|
+ * | `joinTwo` | `{first}并{second}` | `{first} and {second}` | **恰好 2 个活动** |
+ * | `comma` | `，` | `, ` | 3+ 个活动 |
+ * | `more` | `{title}等` | `{title}, etc.` | **>3 个活动** |
+ *
+ * 旧实现只看 `、` / `，`，于是：
+ *
+ * | 真实标题 | 旧判据 | 后果 |
+ * |---|---|---|
+ * | 「已读取文件**并**执行了命令」（2 个活动） | ❌ 不算聚合 | 跟了单一活动的色 |
+ * | 「…**等**」（>3 个） | ❌ 不算聚合 | 同上 |
+ * | 「已读取文件，执行了命令」（3 个） | ✅ | 正确 |
+ *
+ * **2 个活动合并是最常见的形态**（"调用工具并读取文件"），所以漏得最多 ——
+ * 这正是用户反馈"只解决了一半"的**第二层**根因（第一层是标签表覆盖不足，见下）。
+ *
+ * ## ⚠️⚠️ 第三层根因：必须数「命中的活动文案」，不能数「语义桶」
+ *
+ * 内核是按 `message.stepProcess.done.<key>` 的 **key** 区分活动的，
+ * **同一个语义桶下可以有多个不同的 key**：
+ *
+ * | 语义桶 | 内核 key |
+ * |---|---|
+ * | `read` | `read`、`readImage` |
+ * | `write` | `write`、`edit` |
+ * | `command` | `commands`、`code` |
+ * | `web` | `webSearch`、`webFetch` |
+ *
+ * 旧实现用 `Set` 按**桶**去重，于是「运行了代码，执行了命令」（`code` + `commands`）
+ * 被算成**一个**活动 → 不判聚合 → 又跟了单一活动的色。
+ * 实测确认过：`已读取文件，已读取图片`、`已写入文件，修改了文件`、
+ * `已搜索网页，已访问网页` 全部漏判。
+ *
+ * → 判据改为**数命中的标签个数**（≥2 即聚合），与内核的 `labels.length >= 2` 对齐。
+ *
+ * ## 为什么不需要「连接词」前置筛（且不该加）
+ *
+ * 内核**只要 ≥2 个活动就一定插连接词**（`joinTwo` / `comma` / `more` 三分支）。
+ * 反过来，单个活动时 `label` 直接是该活动文案，**没有任何连接词**。
+ * 所以"命中 ≥2 个活动文案"与"含连接词"在真实数据上等价 ——
+ * 但数标签更**稳**：将来内核换分隔符（或某语言用别的连接词）不会失效。
+ *
+ * ⚠️ 「并」「等」是极常见的单字，**只看连接词**会把普通文本误判成聚合。
+ * 这也是本函数不用连接词做主判据的原因之一。
+ *
+ * ## ⚠️ 只看「标签部分」，不看「详情部分」
+ *
+ * `ProcessGroupHeader` 的标题可能是 `label + TITLE_SEPARATOR + detail`
+ * （见 `hasTitleDetail`），而 **detail 是模型的分析正文** ——
+ * 正文里顺带提到别的活动名（"现在我将读取文件"）不该把这一行判成聚合。
+ * 内核拼接活动的成果全在 label 部分，所以这里先按分隔符切掉 detail。
  *
  * @param text 过程组标题的完整文本。
  * @returns 是否为聚合摘要。
  */
 export function isAggregateTitle(text) {
   if (typeof text !== 'string' || text === '') return false;
-  // 聚合标题由内核用「、」连接多个活动名；单个活动名不含分隔符。
-  if (!text.includes('、') && !text.includes('，')) return false;
-  const found = new Set();
-  for (const [label, category] of Object.entries(ACTIVITY_LABELS)) {
-    if (text.includes(label)) found.add(category);
+
+  // 只看标签部分：detail 是模型正文，其中的活动名不算"内核拼接出来的活动"。
+  const cut = text.indexOf(TITLE_SEPARATOR);
+  const labelPart = cut === -1 ? text : text.slice(0, cut);
+
+  // 数命中了几条活动文案（≥2 → 聚合）。
+  //
+  // ⚠️ 这条判据成立的前提是**没有任何一条文案是另一条的子串**
+  //    （否则一个活动会被数成两条）。该不变式由
+  //    `test/aggregate-titles.test.mjs` 的一条专门用例锁住 —— 改表时必须仍绿。
+  let matched = 0;
+  for (const label of Object.keys(ACTIVITY_LABELS)) {
+    if (labelPart.includes(label)) matched += 1;
   }
-  return found.size > 1;
+  return matched > 1;
 }
 
 /**
- * 活动名（中文 label）→ 归一化语义。
+ * 活动名（文案）→ 归一化语义。
  *
  * ⚠️ 与 `ACTIVITY_CATEGORY`（`data-process-activity` 的机器值 → 类别）不同：
- * 这张表是**中文文案 → 语义桶**，只用于 `isAggregateTitle` 判断"标题里提到了
- * 几种不同的活动"。取值来自内核 `ui-chat` 的 `message.stepProcess.*` 文案。
+ * 这张表是**可见文案 → 语义桶**，只用于 `isAggregateTitle` 判断"标题里提到了
+ * 几种不同的活动"。
+ *
+ * ## ⚠️⚠️ 取值必须逐字来自内核（2026-10-17 修正，此前是凭印象写的）
+ *
+ * 旧版表里有一半是**猜的措辞**（「创建了文件」「写入了文件」「运行命令」
+ * 「派遣子代理」「询问用户」…），内核根本没有这些词；而内核真正用的 14 个
+ * `done.*` 文案里，旧表**只覆盖了 6 个**。后果：聚合判据大面积失效
+ * → 用户反馈"调用工具与读写文件等合并在一起的颜色错误，只解决了一半"。
+ *
+ * 实测核对方法（复现用）：
+ * ```js
+ * // 从内核 bundle 抽 zh/en 文案
+ * const zh = [...s.matchAll(/"message\.stepProcess\.done\.(\w+)":\s*"([^"]*)"/g)];
+ * ```
+ * 来源：`/dsh/node_modules/@deepseek-ai/dsh-client-ui-chat/lib/client.js`
+ * （asar 提取件 `/tmp/cc-diag/chat-client.js`，zh 在 6545-6563 行 / en 在 6743-6756 行）。
+ *
+ * ⚠️ **中英都要列**：用户可能切英文界面，而内核英文文案与中文毫无字面关系
+ * （`Read files` / `Edited files` / `Ran commands` …）。
+ * ⚠️ **不要收录内核没有的措辞** —— 多列的键不会生效，只会让后来者误以为覆盖了。
  */
-const ACTIVITY_LABELS = {
-  已读取文件: 'read',
-  读取文件: 'read',
-  修改了文件: 'write',
-  创建了文件: 'write',
-  写入了文件: 'write',
-  执行了命令: 'command',
-  运行命令: 'command',
-  执行命令: 'command',
+export const ACTIVITY_LABELS = {
+  // ── thinking ──
   已完成分析: 'thinking',
-  正在分析: 'thinking',
-  分析请求: 'thinking',
-  已搜索: 'search',
-  搜索: 'search',
-  已获取网页: 'web',
-  网络请求: 'web',
-  询问用户: 'question',
-  询问: 'question',
-  派遣子代理: 'subagent',
-  子代理: 'subagent',
+  'Analysis completed': 'thinking',
+  // ── read（两条内核文案 + 英文复数）──
+  已读取文件: 'read',
+  已读取图片: 'read',
+  'Read files': 'read',
+  'Read images': 'read',
+  // ── write（内核把 write 与 edit 分成两个 key，但都归 write 语义桶）──
+  已写入文件: 'write',
+  修改了文件: 'write',
+  'Wrote files': 'write',
+  'Edited files': 'write',
+  // ── search ──
+  已搜索代码: 'search',
+  'Searched code': 'search',
+  // ── command（commands 与 code 都归 command 桶）──
+  执行了命令: 'command',
+  运行了代码: 'command',
+  'Ran commands': 'command',
+  'Ran code': 'command',
+  // ── web ──
+  已搜索网页: 'web',
+  已访问网页: 'web',
+  'Searched the web': 'web',
+  'Visited web pages': 'web',
+  // ── subagent ──
+  已协调子智能体: 'subagent',
+  'Coordinated subagents': 'subagent',
+  // ── question（内核 key 是 questions）──
+  向用户提出了问题: 'question',
+  'Asked questions': 'question',
+  // ── plan（内核有独立 key，本插件无对应类别，归 other）──
+  更新了计划: 'plan',
+  'Updated the plan': 'plan',
+  // ── tools（"调用工具"—— 用户截图里那一条）──
+  已调用工具: 'tools',
+  'Called tools': 'tools',
 };
+
 
 /**
  * 重试行（`<details class="<hash>_retryRow">`）的识别。

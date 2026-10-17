@@ -46,7 +46,7 @@ import {
 } from './constants.js';
 import { presetColorFor, presetColors } from './palettes.js';
 import { CATEGORY_KEYS, PRESET_KEYS } from './locale.js';
-import { sanitizeColor, scopedPreviewCss } from './css.js';
+import { sanitizeColor } from './css.js';
 
 /** 预设选择顺序。 */
 /**
@@ -66,30 +66,77 @@ function effectiveColor(draft, category) {
 }
 
 /**
+ * 色板每行放几个格子（26 个候选 → 2 行 × 13）。
+ *
+ * 用户 2026-10-17：「这个预设颜色可以多一点 两行吧 数量比现在多一倍
+ * 依旧从传统色中选择适合的 不要太鲜艳」。
+ */
+export const SWATCH_COLUMNS = 13;
+
+/**
  * 取某个预设下该类别的色板候选。
  *
  * 返回的是「整对」而非单个色：色板里每个颜色都有配套的浅/深值，用户点一下
  * 想要的是"这一套"，不是把同一个色值塞进两边（那会在另一个主题下失明）。
  *
+ * ## 数量：14 → 26（2026-10-17 修正）
+ *
+ * 旧实现结尾是 `list.slice(0, 14)` —— **硬砍一半**。实测：
+ *
+ * ```
+ * presetColors('chinese'|'japanese'|'macaron') 键数 = 26（三套预设都一样）
+ * ALL_CATEGORIES 数量 = 26
+ * ALL_CATEGORIES 里不在 palette 的 = （无，完全覆盖）
+ * ```
+ *
+ * 即 `palette` 本来就是**全部 26 个类别色**（含状态类与权限类），
+ * `slice(0, 14)` 才是真限制。去掉它 → **26 个 = 2 行 × 13**，
+ * 同时满足用户「多一倍」（14→26 ≈ 1.86×）与「两行」两个要求。
+ *
+ * ## ⚠️ 为什么不去凑满 28（实测过，不可靠）
+ *
+ * 用户说的是"多一倍"（14×2=28）。Lead 试过用 `buildPalette` 另挑 5 个传统色补到 28，
+ * **实测失败**：`japanese`（58 色）与 `macaron`（34 色）色库太小，
+ * 挑出来的色对出现 `light === dark`（同一色值塞两边 → 换主题就失明）
+ * 或与已有色撞车。这与 `palettes.js` 里状态类改固定色的原因是同一个
+ * （见 `STATUS_COLORS` 的说明）。
+ *
+ * → 结论：**26 是"零新增色、零风险"能给出的最大整齐值**（且刚好两行）。
+ *   26 已覆盖全部 26 个类别，语义上也最完整：色板 = "所有类别的颜色任选"。
+ *
+ * ## 关于「重复色」
+ *
+ * 26 个键里有 3 组是**权限类刻意复用内容类**的色值（如 `perm-auto` 与 `thinking`
+ * 同色 —— 见 `PERMISSION_SEMANTICS`）。所以格子里会有 3 对**看起来一样**的色块。
+ * 这是真实情况（那些类别的颜色本来就相同），**不做跨类别去重** ——
+ * 去重会让数量掉到 23，既凑不出整齐的两行，也不再等于"全部类别"。
+ *
+ * ⚠️ 候选值全部来自**既有预设**（传统色），因此：
+ * - 天然满足「从传统色中选择适合的、不要太鲜艳」；
+ * - **不可能引入新撞色**（值本来就在调色板里，撞色断言必然仍绿）。
+ *
+ * 顺序：**本类别自己那一对排在最前**（保持既有行为，用户点第一格即"回到本类语义色"），
+ * 其余按 `palette` 的键序。
+ *
  * @param presetId 预设 id。
  * @param category 类别。
- * @returns `[{ light, dark }]` 列表，本类别自己的一对排在最前。
+ * @returns `[{ light, dark }]` 列表，长度 == `presetColors(presetId)` 的键数（26）。
  */
-function swatchesFor(presetId, category) {
+export function swatchesFor(presetId, category) {
   const palette = presetColors(presetId);
-  const own = palette[category];
-  const seen = new Set();
   const list = [];
-  const push = (pair) => {
-    if (pair === undefined) return;
-    const key = `${pair.light}|${pair.dark}`;
-    if (seen.has(key)) return;
-    seen.add(key);
+
+  // 本类别自己的一对排最前（用户点第一格 = 回到本类语义色）。
+  const own = palette[category];
+  if (own !== undefined) list.push({ light: own.light, dark: own.dark });
+
+  // 其余类别按键序追加；跳过自己（已在最前），**不按色值去重**（见上方说明）。
+  for (const [key, pair] of Object.entries(palette)) {
+    if (key === category) continue;
+    if (pair === undefined) continue;
     list.push({ light: pair.light, dark: pair.dark });
-  };
-  push(own);
-  for (const pair of Object.values(palette)) push(pair);
-  return list.slice(0, 14);
+  }
+  return list;
 }
 
 /**
@@ -231,23 +278,38 @@ function CategoryRow(props) {
           }),
         ],
       }),
-      jsx('div', {
+      // ── 色板：固定 **两行**（用户 2026-10-17：「两行吧」）──────────────
+      //
+      // 旧实现用 `flexWrap: 'wrap'` 让浏览器自行折行 —— 折成几行取决于容器宽度，
+      // 用户在窄侧栏里可能看到 3~4 行、宽屏上看到 1 行，不稳定。
+      // 现在用 grid 固定列数，26 个候选 = 2 行 × 13。
+      //
+      // ⚠️ 「恢复预设值」按钮**不放进 grid**（否则会被当成一个格子挤进去）。
+      //    把它放在色板右侧，用 flex 包一层。
+      jsxs('div', {
         style: {
           gridColumn: '1 / -1',
           display: 'flex',
-          flexWrap: 'wrap',
-          gap: '4px',
           alignItems: 'center',
+          gap: '8px',
+          flexWrap: 'wrap',
         },
         children: [
-          ...swatches.map((pair) => jsx(Swatch, {
-            key: `${pair.light}|${pair.dark}`,
-            color: pair.dark,
-            label: t(CATEGORY_KEYS[category]),
-            active: sanitizeColor(color.light) === sanitizeColor(pair.light)
-              && sanitizeColor(color.dark) === sanitizeColor(pair.dark),
-            onPick: () => onEdit(category, 'pair', pair),
-          }, `${pair.light}|${pair.dark}`)),
+          jsx('div', {
+            style: {
+              display: 'grid',
+              gridTemplateColumns: `repeat(${SWATCH_COLUMNS}, 20px)`,
+              gap: '4px',
+            },
+            children: swatches.map((pair) => jsx(Swatch, {
+              key: `${pair.light}|${pair.dark}`,
+              color: pair.dark,
+              label: t(CATEGORY_KEYS[category]),
+              active: sanitizeColor(color.light) === sanitizeColor(pair.light)
+                && sanitizeColor(color.dark) === sanitizeColor(pair.dark),
+              onPick: () => onEdit(category, 'pair', pair),
+            }, `${pair.light}|${pair.dark}`)),
+          }),
           jsx(Button, {
             variant: 'ghost',
             size: 'sm',
@@ -260,75 +322,6 @@ function CategoryRow(props) {
   });
 }
 
-/**
- * 实时预览：用当前 draft 生成同一套 CSS，并渲染几个样例行。
- *
- * 这样"实际渲染预览"是真的走生产样式生成器（`css.js`），不是另画一份 ——
- * 预览与真实效果不可能不一致。
- *
- * @param props.draft 当前草稿。
- * @param props.cssText 由 draft 生成的样式文本。
- * @param props.t 文案函数。
- */
-function Preview(props) {
-  const { cssText, t } = props;
-  const rows = [
-    { cat: 'commandLow', label: t('categoryCommandLow') },
-    { cat: 'commandMid', label: t('categoryCommandMid') },
-    { cat: 'commandHigh', label: t('categoryCommandHigh') },
-    { cat: 'thinking', label: t('categoryThinking') },
-    { cat: 'read', label: t('categoryRead') },
-  ];
-  return jsxs('div', {
-    children: [
-      // 预览区自带一份样式，且作用域限定在 .cc-preview 内，避免影响页面其他部分。
-      jsx('style', { children: scopedPreviewCss(cssText) }),
-      jsxs('div', {
-        className: 'cc-preview',
-        style: {
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '2px',
-          padding: '8px 10px',
-          borderRadius: '8px',
-          background: 'var(--dsw-alias-bg-base)',
-          border: '1px solid var(--dsw-alias-border-l1)',
-        },
-        children: rows.map((row) => jsxs('div', {
-          // 模拟宿主结构：根元素带类别标记，表头带 [data-disclosure-header]。
-          'data-cc-cat': row.cat,
-          'data-cc-scope': 'header',
-          style: { display: 'flex', flexDirection: 'column' },
-          children: [
-            jsxs('div', {
-              'data-disclosure-header': true,
-              style: { display: 'flex', alignItems: 'center', gap: '6px', height: '24px' },
-              children: [
-                jsx('span', {
-                  'data-disclosure-row': true,
-                  style: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px' },
-                  children: [
-                    jsx('span', {
-                      'aria-hidden': 'true',
-                      style: {
-                        width: '14px',
-                        height: '14px',
-                        borderRadius: '50%',
-                        border: '1.5px solid currentColor',
-                        display: 'inline-block',
-                      },
-                    }),
-                    jsx('span', { children: row.label }),
-                  ],
-                }),
-              ],
-            }),
-          ],
-        }, row.cat)),
-      }),
-    ],
-  });
-}
 
 
 /**
@@ -337,13 +330,13 @@ function Preview(props) {
  * props 由插槽的 `inject` 面提供（见 `settings-card-face`）。
  */
 export function ColorfulCommandsCard(props) {
-  const { t, onSave, onDiscard, setDraft, buildCss, formState } = props;
+  // ⚠️ `buildCss` 仍留在插槽 inject 面里（其它地方/测试按契约使用），
+  //    但本卡片**不再消费它** —— 原先只有已删除的预览区块需要它。
+  const { t, onSave, onDiscard, setDraft, formState } = props;
   // 订阅完整快照：草稿与表单状态在同一个 store 里，所以一次订阅拿全。
   const snapshot = props.useDraft((value) => value);
   const draft = snapshot.config;
   const state = formState(snapshot);
-
-  const cssText = useMemo(() => buildCss(draft), [draft, buildCss]);
 
   const edit = useCallback((category, mode, value) => {
     setDraft((current) => {
@@ -452,14 +445,14 @@ export function ColorfulCommandsCard(props) {
           ],
         }),
 
-        // ── 预览 ──────────────────────────────────────────────────
-        jsxs('section', {
-          children: [
-            jsx('h3', { style: { margin: '0 0 2px', fontSize: '13px', fontWeight: 600, color: 'var(--dsw-alias-label-primary)' }, children: t('previewTitle') }),
-            jsx('div', { style: { fontSize: '12px', color: 'var(--dsw-alias-label-tertiary)', marginBottom: '6px' }, children: t('previewHint') }),
-            jsx(Preview, { draft, cssText, t }),
-          ],
-        }),
+        // ── 预览区块已删除（用户 2026-10-17：「设置里的这个预览删掉 有bug 懒得修」）
+        //    原先这里渲染一个 <Preview>：它用 scopedPreviewCss() 把生产样式
+        //    加 .cc-preview 前缀后局部渲染几行样例行。删除原因：该区块有 bug，
+        //    用户明确表示不修、直接去掉。随之清理：
+        //      · Preview 组件本体
+        //      · css.js 的 scopedPreviewCss()（仅此处使用）
+        //      · locale 的 previewTitle / previewHint
+        //    ⚠️ 不要再加回来 —— 若将来要做预览，请重新评估实现（别再复用这段）。
 
         jsxs('div', {
           style: { display: 'flex', gap: '8px', alignItems: 'center' },

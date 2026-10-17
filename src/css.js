@@ -198,6 +198,69 @@ function categoryBranch(category, color, prefix = '') {
   const actions = `${p}${sel}[${SCOPE_ATTR}="actions"]`;
 
   /**
+   * 「复制 / 点赞 / 点踩」的排除选择器（用户 2026-10-17 要求这三个**不要**上色）。
+   *
+   * 真机结构：这三者全部位于
+   * `[data-slot="conversation.chat.assistant-actions"]` 插槽容器**内部**，
+   * 而「分支」与「用量」在该容器**外面**（见下方 ⑥ 的完整 DOM 与推理）。
+   *
+   * → 用 `:not(容器 *)` 排除其全部后代。
+   *
+   * ⚠️ `:not()` 内是**复杂选择器**（后代组合子），需 CSS Selectors Level 4
+   *    （Chromium 88+；本机 Electron 44 满足）。
+   * ⚠️ 该 slot 名是内核的稳定插槽契约
+   *    （`renderSlot("conversation.chat.assistant-actions", …)`），
+   *    比 aria-label 文案（本地化）稳定得多。
+   */
+  const NOT_ASSISTANT_ACTIONS = ':not([data-slot="conversation.chat.assistant-actions"] *)';
+
+  /**
+   * 「复制」按钮的排除选择器（用户 2026-10-17 要求复制**不要**上色）。
+   *
+   * ## 为什么必须用 aria-label，而不是结构
+   *
+   * 真机探针实测（`ccv` 探针，turn=32）：
+   *
+   * ```
+   * 复制       cls=_4sesoa_action  parent=DIV._4sesoa_actions N1-_sG_actions  sibIdx=0  slot=conversation.chat.node
+   * 在新对话中分支 cls=_4sesoa_action  parent=DIV._4sesoa_actions N1-_sG_actions  sibIdx=2  slot=conversation.chat.node
+   * 好的回答    cls=DKqaCW_action   parent=DIV.(空 class)  sibIdx=0  slot=conversation.chat.assistant-actions
+   * ```
+   *
+   * → **复制与分支同类名、同父容器，且最近的 `data-slot` 祖先都是外层的
+   *   `conversation.chat.node`**（不是 assistant-actions），
+   *   所以 `class` / `data-slot` / `:nth-child` **都无法把二者分开**。
+   *   唯一可用判据是 `aria-label` 文案。
+   *
+   * ⚠️ 这也**推翻了上一轮取证报告**里"复制在 assistant-actions 插槽内"的说法 ——
+   *    探针实测它在插槽**外**（与分支并列，都在 `_4sesoa_actions` 直接子级）。
+   *
+   * ## 文案是闭集（已实测核对）
+   *
+   * 内核 `locale-client.js` 里 `copy` / `copied` 只有两套语言：
+   * `复制` / `复制成功`（zh-CN）与 `Copy` / `Copied`（en）——
+   * 所以枚举这 4 个值是**完备**的（`copied` 是点击后约 1 秒的瞬时文案，
+   * 挂在**同一个按钮**上，必须一并排除，否则点一下复制就会闪成类别色）。
+   *
+   * ⚠️ 与本仓库既有做法一致：`classify.js` 的 `turnProcessCategory()` 同样
+   *    按内核 zh/en 文案匹配。
+   * ⚠️ 若内核将来新增语言，这里要同步补值 —— 未覆盖时表现为
+   *    "复制按钮在某些语言下仍被染色"，不会崩。
+   */
+  const NOT_COPY = ':not([aria-label="复制"]):not([aria-label="复制成功"])'
+    + ':not([aria-label="Copy"]):not([aria-label="Copied"])';
+
+  /**
+   * `actions` 作用域真正的染色目标：**按钮自身**，且排除上面两类。
+   *
+   * ⚠️ svg 规则也挂在这个目标之下（`… svg{color}`），而不是直接写
+   *    `${actions} svg` —— 否则**排除只作用于按钮、图标仍会被染**
+   *    （图标是 `stroke="currentColor"`，但内核给 svg 自己声明了 color，
+   *     必须由我们显式覆盖；这正是历史缺陷"文字上色了、图标没有"的来源）。
+   */
+  const actionsTargets = `:is(button,[role="button"],a)${NOT_ASSISTANT_ACTIONS}${NOT_COPY}`;
+
+  /**
    * 标题选择器。
    *
    * DSH 用 CSS Module，类名形如 `<构建哈希>_<原类名>`（实测 `Ph6Lgq_title`、
@@ -299,22 +362,52 @@ function categoryBranch(category, color, prefix = '') {
     `${plain} svg{color:${color}}`,
     `${plain} :is([class*="_retryText"],[class*="_compactionButton"],[class*="_title"],[class*="_summary"],summary){color:${color}}`,
 
-    // ⑥ 消息尾部（turn-tail）的用量/分支按钮。
+    // ⑥ 消息尾部（turn-tail）的**用量**与**分支**按钮。
     //
-    //    真机结构（2026-10-17 从运行中的应用读出的真实 DOM）：
-    //      DIV[data-turn-tail="22"][data-actions-reveal="hover"]
-    //        DIV._actions[data-clock="end"]
-    //          BUTTON[aria-label="在新对话中分支"]
+    //    真机结构（2026-10-17 从运行中的应用读出的真实 DOM，turn=62）：
+    //      DIV[data-turn-tail="62"][data-actions-reveal="hover"]
+    //        DIV._4sesoa_actions
+    //          DIV[data-slot="conversation.chat.assistant-actions"]   ← 复制/点赞/点踩在这层里
+    //            BUTTON{_4sesoa_action aria-label="复制"}
+    //            BUTTON{DKqaCW_action aria-label="好的回答" aria-pressed="false"}
+    //            BUTTON{DKqaCW_action aria-label="有问题的回答" aria-pressed="false"}
+    //          BUTTON{_4sesoa_action aria-label="在新对话中分支"}      ← 分支在 data-slot **外面**
+    //        BUTTON{_7hGK5G_trigger} 文本「用量 29.9M tok」            ← 用量也在外面
     //
-    //    用户要求：底部用量信息与分支上色，但「不要太鲜艳抢眼」；并指出
-    //    「只有最后一条的控件会自动显示，过往消息的控件需要鼠标悬浮才显现」，
-    //    选择 **3a**（悬浮出现时就上色，接受轻微跳变）。
-    //    → 按**元素存在**判定即可，常显与悬浮显现两种情形自然都覆盖。
+    //    ## ⚠️⚠️ 用户 2026-10-17 明确要求（这一条推翻了上一轮的"现状"）
+    //
+    //      原话：「我要的是 消息尾部只有**分支**和**用量**上色，
+    //             复制 点踩和点赞**不要上色**」
+    //
+    //    旧实现用**后代选择器** `:is(button,…)`，把容器内**所有** button 都染了 ——
+    //    于是复制/点赞/点踩一起被染成 meta 色（真机实测：
+    //    四个按钮 computed color 全是 rgb(143,163,181)）。
+    //
+    //    ## 判据为什么是 `:not([data-slot="conversation.chat.assistant-actions"] *)`
+    //
+    //    内核里复制与分支**同类名**（都是 CSS Module 的 `css.action` = `_4sesoa_action`）、
+    //    **同父容器**，且轮换位置（`extraActions` 是插槽注入的，数量 0/1/2 可变，
+    //    `clock === "start"` 时前面还会多一个时间 span）→
+    //    **class 与 `:nth-child` 都不可靠**。
+    //
+    //    唯一稳定的结构差异：**复制/点赞/点踩三者全部在
+    //    `[data-slot="conversation.chat.assistant-actions"]` 这个插槽容器内部，
+    //    而分支与用量在它外面。**
+    //    → 用 `:not(容器 *)` 把该插槽的后代排除掉。
+    //
+    //    ⚠️ 用 aria-label 文案（"复制"/"Copy"）作判据是**不可取**的：
+    //       它是本地化字符串，换语言/换版本即失效；而这个 slot 名是内核的
+    //       **稳定插槽契约**（`renderSlot("conversation.chat.assistant-actions", …)`，
+    //       见 chat-client.js 的 TurnTailNodeView）。
+    //    ⚠️ `:not()` 里是**复杂选择器**（带后代组合子），需要 CSS Selectors Level 4
+    //       支持（Chromium 88+；本机 Electron 44 满足）。
     //
     //    ⚠️ 只染 button/a **自身**，不染后代文本 —— 否则容器里的
     //    「已完成 · 用时」正文会被一起吞进来。
-    `${actions} svg{color:${color}}`,
-    `${actions} :is(button,[role="button"],a){color:${color}}`,
+    //    ⚠️ svg 规则挂在 actionsTargets 之下（不是裸 `${actions} svg`），
+    //       这样排除才会同时作用于"按钮的文字"与"按钮里的图标"。
+    `${actions} ${actionsTargets}{color:${color}}`,
+    `${actions} ${actionsTargets} svg{color:${color}}`,
   ].join('\n');
 }
 
@@ -394,50 +487,4 @@ export function resolveColors(config, options = {}) {
   }
 
   return { enabled: true, colors };
-}
-/**
- * 把生产样式限制在预览容器内。
- *
- * 生产 CSS 的选择器有两种形状：
- * 1. `[data-cc-cat=…]…` —— 直接加 `.cc-preview ` 前缀；
- * 2. `body[data-ds-dark-theme] [data-cc-cat=…]…` —— 深色分支。
- *
- * ⚠️ 第 2 种不能无脑加前缀：`body` 是 `.cc-preview` 的**祖先**，写成
- * `.cc-preview body[data-ds-dark-theme]` 永远匹配不到（"body 在 .cc-preview 里"
- * 不成立），结果是**深色主题下预览永远显示浅色值** —— 静默失效。
- * 正确做法是把 `.cc-preview` 插到主题条件**之后**。
- *
- * @param cssText 生产样式文本。
- * @returns 作用域化后的 CSS。
- */
-export function scopedPreviewCss(cssText) {
-  if (typeof cssText !== 'string' || cssText === '') return '';
-  const DARK_PREFIX = 'body[data-ds-dark-theme]';
-  return cssText
-    .split('\n')
-    .map((line) => {
-      const trimmed = line.trim();
-      if (trimmed === '' || trimmed.startsWith('/*')) return '';
-      const open = trimmed.indexOf('{');
-      if (open === -1) return '';
-      const selector = trimmed.slice(0, open).trim();
-      const rest = trimmed.slice(open);
-      const scoped = selector
-        .split(',')
-        .map((part) => {
-          const piece = part.trim();
-          if (piece === '') return '';
-          if (piece.startsWith(DARK_PREFIX)) {
-            // 主题条件保持在最外层，容器插在它后面。
-            return `${DARK_PREFIX} .cc-preview${piece.slice(DARK_PREFIX.length)}`;
-          }
-          return `.cc-preview ${piece}`;
-        })
-        .filter((piece) => piece !== '')
-        .join(',');
-      if (scoped === '') return '';
-      return `${scoped}${rest}`;
-    })
-    .filter((line) => line !== '')
-    .join('\n');
 }
