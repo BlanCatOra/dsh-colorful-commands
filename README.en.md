@@ -1,106 +1,121 @@
 # dsh-colorful-commands
 
+**Color the DeepSeek Harness interface by category** — thinking, commands (graded by risk), file reads and writes, search, web requests, other tools — plus the permission selector and plan-mode control near the composer.
+
+Ships with **traditional-color presets** (Chinese traditional, 742 colors / Japanese traditional / Macaron) and lets you **customize every category** for light and dark themes. The palette is deliberately low-saturation and contrast-constrained, so **it stays easy on the eyes during long sessions**.
+
 [中文](README.md) | English
 
-> 🤖 **For AI agents**: before changing this repo, read [AGENTS.md](./AGENTS.md)
+> 🤖 **AI-generated notice**: this repository was produced by the AI coding agent
+> **blancatora** (DeepSeek Harness / deepseek-v4.1-flash). It is **not** hand-written.
+> It may contain errors or unverified claims — please verify before relying on it.
+
+> 🤖 **For AI agents**: before changing this repo, read [AGENTS.md](AGENTS.md)
 > (how to change it: verification commands, build artifacts, hard constraints,
-> off-limits areas, repo-specific gotchas) and [llms.txt](./llms.txt)
-> (what it does, doc index, known limits). Humans can skip this line.
+> off-limits areas, repo-specific gotchas) and [llms.txt](llms.txt) (what it does,
+> doc index, known limits). Humans can skip this line.
 
-Color the DeepSeek Harness interface **by category**: thinking, commands (**graded by risk**), file reads, writes, search, web requests, other tools. Interface controls near the composer (permission select, plan mode) can be colored separately, and the permission select **recolors itself per access level**.
-
-Ships with three preset palettes — **Chinese traditional (default)**, **Japanese traditional**, and **Macaron** — and lets you set every category by hand, with separate colors for light and dark themes.
-
----
+<!-- Screenshot placeholder: drop the image at docs/screenshot.png and uncomment below -->
+<!-- ![screenshot](docs/screenshot.png) -->
 
 ## What it colors
 
-| Category | Target |
+| Category | What gets colored |
 |---|---|
-| Thinking / reasoning | Reasoning rows (`data-variant="think"`) |
-| Commands | `bash` / `pwsh` |
-| **Command · low/medium/high risk** | `bash` / `pwsh` rows, graded by a risk word list over the command text |
-| **Model request retry** | the retry row (`_retryRow`) |
-| File reads | `read` / `read_image` |
-| Writes / edits | `write` / `edit` / `run_code` |
-| Search | `grep` / `glob` (local search) |
+| Thinking / reasoning | Reasoning rows, process-group titles |
+| **Commands · low / mid / high** risk | `bash` / `pwsh` rows — graded by the **actual command text**, all three tiers in the red family with increasing saturation |
+| File reads | `read`, image reads |
+| Writes / edits | `write` / `edit` |
+| Search | `grep` / `glob` |
 | Web requests | `web_search` / `web_fetch` |
-| Other tools | Anything unclassified |
-| User / assistant | User and assistant blocks in the message flow |
+| Other tools | Unclassified tools (neutral color) |
+| Status | “Done” success green, context-ring tiers, mixed-activity titles, tail usage / branch buttons |
+| UI controls | Permission selector (recolors per level), plan mode |
 
-Controls: **permission select**, **model select**, **plan mode**, **activity bar**, **composer toolbar**.
+## Presets and customization
 
-## How it colors
+| Preset | Library | |
+|---|---|---|
+| **Chinese traditional** (default) | 742 colors | Picked from the full traditional library by semantic hue; unified tone, low saturation |
+| Japanese traditional | 58 colors | Lighter, quieter palette |
+| Macaron | 34 colors | Pastel — the softest option |
 
-A **2px left stripe plus header text and icon color** — never the background. Background tinting fights the host's own hover/selected states and reads as noise in a long session.
+Colors are **not hand-picked** — they are derived from a target hue, a unified tone, and
+contrast against the real host background.
 
-Expanded command output, diffs, and file contents are **not** tinted: color applies to the collapsed header only, so the body keeps the native palette. This is deliberate — coloring large bodies badly hurts readability.
+**Every category is customizable**: light and dark themes are set **separately**, via a
+swatch picker or raw hex, with one-click reset to preset. Settings live on the
+**plugin detail page** (see “Configure” below).
+
+## Why it's easy on the eyes
+
+- **Low saturation first** — no neon, no high-saturation pure red or blue.
+- **Separate light and dark palettes** — each theme has its own values instead of one color forced onto both.
+- **Contrast is constrained** — every color's contrast against its background stays between
+  **3.0 and 10.5**: too low is unreadable, too high is harsh. This bound is enforced by tests.
+- **Only what should be colored gets colored** — icons, short labels and key statuses only;
+  body text and reasoning output keep their native color. That avoids a wall of color,
+  which is what actually tires your eyes.
+- **Turn any category down** — if something feels harsh, override that category's
+  light/dark value with a softer one.
 
 ## Install
 
-Desktop (DeepSeek Harness Desktop): **Settings → Plugins → Add plugin**, enter `dsh-colorful-commands`, then restart the app.
+**Desktop**: Settings → Plugins → Add plugin, enter `dsh-colorful-commands`, restart the app.
 
-**To confirm it actually works in one shot**: copy the prompt from
-[docs/DEMO-PROMPT.md](./docs/DEMO-PROMPT.md) and send it once — it lights up every
-category at once (all three command risk tiers, the mixed-activity indigo,
-tail usage/branch).
-
-Web / CLI profile:
+**Web / CLI profile**:
 
 ```sh
-dsh plugin --profile web add dsh-colorful-commands
+dsh plugin --profile <profile> add dsh-colorful-commands
 ```
 
-From source:
+## Confirm it actually works in one minute
 
-```sh
-git clone <this repo>
-cd dsh-colorful-commands
-dsh plugin --profile desktop add link:.
-```
+Paste the prompt from [docs/DEMO-PROMPT.md](docs/DEMO-PROMPT.md) into DSH and send it once.
+It lights up every category that a prompt can trigger, and ships with an expected-color table.
 
-## Where to configure
+## Configure
 
-**Sidebar → Plugins → find "Colorful Commands" → configure there.**
+Sidebar → **Plugins → dsh-colorful-commands** (the plugin detail page). You can switch
+presets, override each category's light / dark color (swatch or hex), and reset to preset.
 
-Per DSH convention, a plugin's own settings live on its **plugin detail page**, not in Settings (Settings keeps a read-only plugin list).
+> ⚠️ Plugin settings are **not** on the Settings page — DSH puts plugin config on the
+> plugin's own detail page.
 
-The card lets you:
+## The three command tiers
 
-- toggle coloring on/off (off restores the native palette immediately, settings are kept);
-- pick a preset (Chinese traditional [default] / Japanese traditional / Macaron / none);
-- set each category: **color picker**, **hex input** (`#RGB` / `#RRGGBB`), **palette swatches**;
-- set light and dark themes **separately**;
-- see a **live preview** — the preview runs the same stylesheet generator as the real thing, so it cannot disagree with the result.
+Grading uses the **actual command text** (read from the React fiber, not the model's
+description) and matches danger words:
 
-Edits stay in a draft until you press **Save**.
+| Tier | Example triggers | Light |
+|---|---|---|
+| Low | ordinary commands | `#A7535A` |
+| Mid | `sudo`, `curl`, `chmod -R`, `systemctl`, … | `#C02C38` |
+| High | `rm -rf /`, `mkfs`, `dd of=/dev/`, `git push --force`, … | `#DE2A18` |
 
-## Permissions
-
-**None required.** This plugin:
-
-- reads and writes no files;
-- makes no network requests;
-- registers no HTTP routes;
-- never executes, blocks, or modifies any command — "dangerous command" is purely a color decision, and getting it wrong only affects color.
-
-The Host side does one thing: declare the settings schema. All coloring happens in the browser.
+All three stay in the **red family**; only saturation increases with danger.
 
 ## Known limitations
 
-- Coloring relies on the stable `data-*` attributes DSH exposes (`data-tool` / `data-variant` / `data-kind` / `data-chat-flow-kind` / `data-slot`). If a major DSH upgrade changes them, update `src/classify.js` — that file is the single mapping point and is covered by tests.
-- No corner radius, font, or animation changes — those belong to the DSH theme itself, not this plugin.
-- Dangerous-command detection is **keyword matching**, not a command parser; it exists only as a visual hint.
+- Colors the **client UI only** — it never changes behavior.
+- Relies on the **stable suffix** of kernel CSS Module class names (e.g. `[class*="_title"]`).
+  If the kernel renames those suffixes it stops working (the hash prefix changes every build,
+  so only suffixes are matched).
+- **Rows nested inside a process group** (e.g. “创建子智能体”, “更新任务清单”) only get their
+  **icon** colored; the text stays at its native color — the kernel exposes no per-row
+  semantic hook. See [AGENTS.md](AGENTS.md) §5.6.
+- The `japanese` / `macaron` libraries are small, so a few categories have identical light and
+  dark values (known defect; the list is frozen in the tests).
 
 ## Development
 
 ```sh
-npm run build   # generate lib/client.js from src/ (with build-time artifact guards)
-npm test        # build, then run the full suite
+npm test     # = build + full test suite (one command)
 ```
 
-`lib/client.js` is generated — **do not edit it by hand**. Rebuild after changing `src/`.
+`lib/client.js` is a build artifact and **is committed**; edit `src/` only, never the artifact.
+Read [AGENTS.md](AGENTS.md) before changing anything.
 
 ## License
 
-MIT
+[MIT](LICENSE) © 2026 blancatora

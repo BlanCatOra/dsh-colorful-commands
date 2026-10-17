@@ -1,37 +1,35 @@
 # AGENTS.md
 
 > 本文件给 **AI 编码 agent** 看。人类请看 [README.md](./README.md)。
-> 规范依据：本机规范文档 `~/Projects/dsh-plugin-standards/docs/AGENT-FACING-STANDARDS.md`
-> （**不随本仓库发布**，公开读者可参考 [agents.md](https://agents.md/)）
-> （[agents.md](https://agents.md/) 格式）。
+> 格式遵循 [agents.md](https://agents.md/)。
 >
-> 本文件只写**会影响你改对代码**的事。每条结论都有实测依据，不是通用建议。
+> 这里只写**会影响你改对代码**的事，每条都有实测依据，不是通用建议。
 
 ---
 
 ## 1. 验证（改完必须跑这条）
 
 ```sh
-npm test          # = node src/build-client.mjs && node --test test/*.test.mjs
+npm test     # = node src/build-client.mjs && node --test test/*.test.mjs
 ```
 
-**一条命令覆盖构建 + 全量测试**（当前 179 条）。提交前必须绿。
+一条命令覆盖**构建 + 全量测试**（当前 189 条）。提交前必须绿。
 
 ⚠️ **只跑 `node --test` 不算验证** —— 测试全绿 ≠ 构建能过。
-构建期有额外断言（见 §4），曾经出现过"测试全绿、构建直接失败"的情况。
-所以：**只要碰了 `src/`，就先跑 `node src/build-client.mjs`**。
+构建期有额外断言（见 §3），历史上出现过"测试全绿、构建直接失败"。
+所以：**只要碰了 `src/`，就先跑一次 `node src/build-client.mjs`**。
+
+其它入口：
+
+```sh
+npm run build    # 只构建（含产物守卫）
+npm run check    # 只做语法检查
+```
 
 **改配色 / 改分类逻辑后**，除了跑测试，还应发一次
 [`docs/DEMO-PROMPT.md`](./docs/DEMO-PROMPT.md) 里的 prompt 做真机回归 ——
 它会一次点亮全部类别，能立刻看出「命令三档是否还是三级红」「混合活动是否还是靛蓝」
 「尾部复制/点赞是否还是灰的」这类**测试抓不到的视觉回归**。
-
-其它入口：
-
-```sh
-npm run build     # 只构建（含产物守卫）
-npm run check     # 只做语法检查（不跑逻辑）
-```
 
 ## 2. 产物
 
@@ -45,18 +43,16 @@ npm run check     # 只做语法检查（不跑逻辑）
 
 ## 3. 硬性约束（违反后会**静默失效**，不一定报错）
 
-这些是踩过的坑，绝大多数不会给你堆栈：
-
 1. **客户端 bundle 只允许 require seed 表里的 9 个模块**，超出**构建失败**：
    `react`、`react/jsx-runtime`、`react-dom`、`react-dom/client`、`@deepseek-ai/cordis`、
    `@deepseek-ai/dsh-client-store`、`@deepseek-ai/dsh-client-ui-slots`、
    `@deepseek-ai/dsh-client-ui-primitives`、`@deepseek-ai/dsh-client-ui-dockkit`。
-   ⚠️ **不要放宽 `SEED_MODULES`** 去"修"构建失败 —— 那说明你引入了不该进浏览器的依赖。
-   真因通常是某个浏览器侧模块 import 了 Host 侧模块（例如 `@deepseek-ai/schemastery`），
+   ⚠️ **不要放宽 `SEED_MODULES` 去"修"构建失败** —— 那说明你引入了不该进浏览器的依赖。
+   真因通常是浏览器侧模块 import 了宿主侧模块（例如 `@deepseek-ai/schemastery`），
    正确做法是**把它内联**或改成本地纯函数。
 
 2. **每个 `ctx.<service>` 必须在导出的 `inject` 里声明**，否则 `apply` 抛错 →
-   cordis fiber `FAILED` → **整个 DSH 白屏**，crash log 只有一行 `<包名>: failed`，没有堆栈。
+   cordis fiber `FAILED` → **整个界面白屏**，日志只有一行 `<包名>: failed`，没有堆栈。
    需要探测"可能还不存在"的服务时用 `ctx.get('name')`，**不要**把它写进 `inject`。
 
 3. **`apply` 绝不允许把异常抛出去**。每个表面各自守卫，失败只降级 + 记录
@@ -67,41 +63,40 @@ npm run check     # 只做语法检查（不跑逻辑）
    （普通 `//` 注释里的反引号无害，只有落在模板字符串**内部**的注释才会炸。）
 
 5. **设置项必须注册到 `plugins.bundle.config`**（key = 包名），不是 `settings.section`。
-   且 Host 侧 `Config` 必须至少有一个 `.volatile()` 字段 ——
+   且宿主侧 `Config` 必须至少有一个 `.volatile()` 字段 ——
    否则内核 `volatileForm()` 返回 `undefined`，命名空间不被服务，设置页显示
    「该设置命名空间尚未就绪」。**这是静默失效，不报错。**
 
-6. **`ctx.<service>` 的 `as` 语义方向**、`Config` 活引用解包（`{get()}`）、
-   pnpm 硬链接脱钩——细节见 skill `dsh-plugin-development`，
-   **涉及插件任务第一件事就是加载那个 skill**，不要凭记忆写。
+6. **`package.json` 的 `dsh.client.immediately` 必须是 `true`** ——
+   第三方客户端 bundle 是惰性加载的，不声明会在建 entry 之前赶不上预取，
+   偶发 `import failed` → 整站白屏，而插件自己的启动报告可能还是 `ok: true`。
 
 ## 4. 禁区（冻结实现，改了会让已验证功能失效）
 
-以下两处是用户明确要求**保留**的（"压缩中上色"真机验证有效）：
+用户明确要求**保留**的两处（"压缩中上色"真机验证有效）：
 
 - `src/classify.js` 的 **`isRunningCompaction()`** 实现
 - `src/dom.js` 的 `CANDIDATE_SELECTOR` 里 **`[data-variant="others"]`**
 
-改它们之前先问用户。相关测试：`test/actions-compaction.test.mjs`（15 条，必须保持绿）。
+改它们之前先问维护者。相关测试：`test/actions-compaction.test.mjs`（15 条，必须保持绿）。
 
 其它禁区：
 
-- **不要碰 `~/.dsh/profiles/`**（运行时配置，不属于本仓库）
-- **不要碰 `node_modules/`**（`file:` 依赖是硬链接快照）
+- **不要碰宿主的运行时配置目录**（`dsh` 的 profile 目录，不属于本仓库）
+- **不要碰 `node_modules/`**
 
 ## 5. 本仓库特有的坑（都有实测依据）
 
-### 5.1 测试写得太死会误报
+### 5.1 测试写得太死会误报，且**新守卫必须做变异验证**
 
-- 断言 CSS 生成结果时，**正则要容忍合理变体**。踩过：`svg\{color:` 把新增的
+- 断言 CSS 生成结果时，正则要容忍合理变体。踩过：`svg\{color:` 把新增的
   `svg:not(...){color:` 误判成"缺 svg 规则"。
-- 反过来：**任何"新增的守卫"都要做变异验证**（把实现改坏，确认测试变红），
-  否则很容易写出**假绿**。本仓库踩过两次：
+- 反过来：**任何新增守卫都要把实现改坏跑一遍**，否则很容易写出**假绿**。踩过两次：
   - 删掉 `CANDIDATE_SELECTOR` 里的 `[data-variant="others"]`，14 条测试**全绿**；
-  - `applySaturationCaps` 的单测只传了含目标键的 specs，"一刀切"变异**抓不到**。
+  - 某个单测的输入没覆盖"一刀切"分支，把实现改成无视配置也**抓不到**。
   → **新测试写完，必须把实现改坏跑一遍**。
 
-### 5.2 浏览器 bundle 里不能拖进 Host 侧模块
+### 5.2 浏览器 bundle 里不能拖进宿主侧模块
 
 测试用 node ESM 会通过符号链接解析依赖，**绕开打包器**，所以测试全绿但构建失败。
 真因与修法见 §3.1。
@@ -121,20 +116,20 @@ npm run check     # 只做语法检查（不跑逻辑）
 `macaron` 有 10/26、`japanese` 有 2/26 个类别的浅深色**完全相同**
 （换主题即"失明"）。根因是小色库导致 `buildPalette` 降级复用。
 该清单已被 `test/settings-card-swatches.test.mjs` **冻结**：出现新条目会变红，
-条目被修好也会变红（提醒同步清单）。**要修请先问用户**（涉及预设实际配色）。
+条目被修好也会变红（提醒同步清单）。**要修请先问维护者**（涉及预设实际配色）。
 
 ### 5.5 真机验证 > 源码推断
 
 内核结构会随版本/状态变化。**要动 DOM 判据之前，本轮重新取一次真机证据**，
-不要引用历史取证报告里的结构结论（踩过：上轮报告说"复制按钮在某个插槽内"，
-本轮真机实测它在外面，导致第一版改法只修好一半）。
+不要引用历史结论（踩过：旧报告说"某按钮在某个插槽内"，本轮真机实测它在外面，
+导致第一版改法只修好一半）。
 
 ### 5.6 过程组「内层行」的文字**不能**用简单办法染色（已试过，回退）
 
-用户 2026-10-17 两轮反馈：先是「创建子智能体/更新任务清单没上色」，
-在我改成整行染色后立刻指出「**思考的正文错误染色**」。
+先是「创建子智能体 / 更新任务清单没上色」，改成**整行染色**后立刻变成
+「**思考的正文错误染色**」。
 
-真机实测（探针 dump，别再重复踩）：
+真机实测（别再重复踩）：
 
 ```
 DIV.ZmL7Ga_root[data-cc-cat="thinking"]   ← 打标元素，**不带 data-process-activity**
@@ -151,46 +146,48 @@ DIV.ZmL7Ga_root[data-cc-cat="thinking"]   ← 打标元素，**不带 data-proce
 1. 内层行**没有任何语义钩子**（全部属性只有 `data-disclosure-row` /
    `data-expandable` / `role` / `aria-expanded`），分不出是「思考」还是「读取」；
 2. 文字在 `_content_1rdzk_11` 里，**没有 `_title` 类** → 旧规则命中不到；
-3. 行文本里**没有字面 ` · `** —— 截图里那个分隔符是 **CSS 伪元素**画的，
+3. 行文本里**没有字面 ` · `** —— 界面上那个分隔符是 **CSS 伪元素**画的，
    所以"按分隔符切出标签"（`splitTitleLabel` 那套）**切不到**；
 4. 打标元素不带 `data-process-activity`，按该属性触发的切分逻辑不会跑。
 
 **结论**：当前只染内层行的**图标**，文字保持原生色（宁可不染，也不能染正文）。
-要做"只染标签"，需要内核给出标签/正文的独立 DOM 钩子，或改走**多语言文字匹配**
-（易碎，不推荐）。**不要再试"整行染色"** —— 用户明确拒绝。
+**不要再试"整行染色"** —— 用户明确拒绝。要做"只染标签"需要内核给出
+标签/正文的独立 DOM 钩子，或改走多语言文字匹配（易碎，不推荐）。
 
 ## 6. 提交规范
 
-```sh
-git -c user.name="blancatora" -c user.email="blancatora@agent.qq.com" commit \
-  -m "fix: ..." \
-  -m "Generated-by: blancatora (DeepSeek Harness / deepseek-v4.1-flash)" \
-  -m "AI-Disclosure: 本提交由 AI 编码代理生成；可能含未经人工复核的改动。"
-```
+- 一个提交只做一件事；信息写清**改了什么、为什么、怎么验证的**。
+- **未证实的结论必须标注「未证实」**，不要把推断写成事实。
+- 若是 AI 代理提交，请在提交信息末尾加：
 
-- 用 `Generated-by:`，**不要**用 `Co-Authored-By:`（那会冒充人类共同作者）。
-- 提交信息写清**改了什么、为什么、怎么验证的**；未证实的结论要标注「未证实」。
+  ```
+  Generated-by: <agent-name> (<harness> / <model>)
+  AI-Disclosure: 本提交由 AI 编码代理生成；可能含未经人工复核的改动。
+  ```
+
+  用 `Generated-by:`，**不要**用 `Co-Authored-By:`（那会冒充人类共同作者）。
 
 ## 7. 发布前
 
-⚠️ **`git push` / 建远端 / 发 PR、issue 必须先得到用户明确同意**，不要自行推送。
+⚠️ **`git push`、建远端、发 PR/issue 必须先得到维护者明确同意**，不要自行推送。
 
-发布流程（GitHub topic、npm 包名、`locale/en.json` 元信息、图标约束）见
-`~/.dsh/AGENTS.md` 的「📦 怎么把一个插件发布到 DSH 生态」。
+发布流程（GitHub topic、npm 包名、`locale/en.json` 元信息、图标约束）
+见 DSH 官方文档 `docs/cookbook/adding-a-package.md`。
 
 ## 8. 目录速览
 
 ```
-src/            源码（改这里）
-  index.js        Host 侧入口（apply/inject 在这里导出）
-  config.js       Host 侧设置 schema（⚠️ 必须有 .volatile() 字段）
+src/              源码（改这里）
+  index.js        宿主侧入口（apply/inject）
+  config.js       宿主侧设置 schema（⚠️ 必须有 .volatile() 字段）
   classify.js     DOM → 类别判定（含冻结的 isRunningCompaction）
   dom.js          候选元素选择与标记（含冻结的 CANDIDATE_SELECTOR）
   css.js          CSS 生成（作用域规则）
   palettes.js     三套预设色板 + 状态色 + 权限色
-  settings-card.js/settings-face.js   设置页 UI
-  locale.js      zh/en 文案
-  data/          传统色库（742 条中国色 / 196 条命令红）
-lib/client.js    构建产物（提交，不手改）
-test/            9 个测试文件，npm test 全跑
+  settings-card.js / settings-face.js   设置页 UI
+  locale.js       zh/en 文案
+  data/           传统色库（742 条中国色 / 196 条命令红）
+lib/client.js     构建产物（提交，不手改）
+test/             9 个测试文件，npm test 全跑
+docs/DEMO-PROMPT.md  一键配色自检 prompt
 ```

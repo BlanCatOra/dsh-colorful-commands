@@ -1,8 +1,8 @@
 {
   "name": "dsh-colorful-commands",
   "displayName": "多彩命令",
-  "description": "按类别给 DSH 的思考、命令、文件读写、搜索等行着色，并可给权限选择等界面控件单独配色；内置中国传统色 / 日本传统色 / 马卡龙色系预设，支持逐类别自定义浅色与深色。",
-  "version": "0.1.0",
+  "description": "按类别给 DSH 的思考、命令（三级风险）、文件读写、搜索等行着色，并可给权限选择等界面控件单独配色；内置中国传统色（742 色）/ 日本传统色 / 马卡龙三套传统色预设，逐类别可自定义浅色与深色；低饱和 + 明暗两套 + 对比度约束，长时间使用不刺眼。",
+  "version": "0.2.0",
   "type": "module",
   "license": "MIT",
   "author": "blancatora",
@@ -12,7 +12,8 @@
     "theme",
     "color",
     "colorful",
-    "ui"
+    "ui",
+    "syntax-highlight"
   ],
   "main": "src/index.js",
   "exports": {
@@ -64,7 +65,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "file:///home/blancat/Projects/dsh-colorful-commands"
+    "url": "git+https://github.com/BlanCatOra/dsh-colorful-commands.git"
+  },
+  "homepage": "https://github.com/BlanCatOra/dsh-colorful-commands#readme",
+  "bugs": {
+    "url": "https://github.com/BlanCatOra/dsh-colorful-commands/issues"
   },
   "private": true
 }
