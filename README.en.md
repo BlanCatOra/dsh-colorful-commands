@@ -134,6 +134,17 @@ All three stay in the **red family**; only saturation increases with danger.
 - The `japanese` / `macaron` libraries are small, so a few categories have identical light and
   dark values (known defect; the list is frozen in the tests).
 
+## Compatibility
+
+Verified on **DSH 0.2.1-rc.2** (Arch package `0.2.1rc.2-1`, bundled runtime `0.2.1-rc.2`):
+the plugin loads (`ok: true`), its stylesheet is injected, 122 elements are classified and
+colored, and the resulting colors match the design values.
+
+- Version gating details live in [AGENTS.md](AGENTS.md) §3.5. Whether this plugin declares
+  `engines.dsh` is a deliberate choice (see that section for why it currently does not).
+- If something stops being colored after a DSH upgrade, run the self-check in
+  [docs/DEMO-PROMPT.md](docs/DEMO-PROMPT.md) first, then follow the triage order in AGENTS.md.
+
 ## Development
 
 ```sh

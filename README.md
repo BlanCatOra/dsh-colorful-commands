@@ -118,6 +118,16 @@ dsh plugin --profile <profile> add https://github.com/BlanCatOra/dsh-colorful-co
   内核没给这些行可区分的语义钩子，见 [AGENTS.md](AGENTS.md) §5.6。
 - `japanese` / `macaron` 色库较小，有少量类别的浅色与深色相同（已知缺陷，清单已冻结在测试里）。
 
+## 兼容性
+
+在 **DSH 0.2.1-rc.2**（Arch 包 `0.2.1rc.2-1`，内置 runtime `0.2.1-rc.2`）实测通过：
+插件正常加载（`ok: true`）、样式注入、122 个元素被正确分类着色，颜色与设计值一致。
+
+- 内核版本判定见 [AGENTS.md](AGENTS.md) §3.5：本插件**是否声明 `engines.dsh`** 有讲究，
+  当前刻意不声明（理由见该节）。
+- 升级 DSH 后若发现不上色，先跑 [docs/DEMO-PROMPT.md](docs/DEMO-PROMPT.md) 自检，
+  再按 AGENTS.md 的排查顺序定位。
+
 ## 开发
 
 ```sh

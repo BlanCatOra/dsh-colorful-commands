@@ -31,7 +31,7 @@
 npm test     # = node src/build-client.mjs && node --test test/*.test.mjs
 ```
 
-一条命令覆盖**构建 + 全量测试**（当前 189 条）。提交前必须绿。
+一条命令覆盖**构建 + 全量测试**（当前 192 条）。提交前必须绿。
 
 ⚠️ **只跑 `node --test` 不算验证** —— 测试全绿 ≠ 构建能过。
 构建期有额外断言（见 §3），历史上出现过"测试全绿、构建直接失败"。
@@ -88,6 +88,58 @@ npm run check    # 只做语法检查
 6. **`package.json` 的 `dsh.client.immediately` 必须是 `true`** ——
    第三方客户端 bundle 是惰性加载的，不声明会在建 entry 之前赶不上预取，
    偶发 `import failed` → 整站白屏，而插件自己的启动报告可能还是 `ok: true`。
+
+### 3.5 DSH 版本判定：**不要**随手声明 `engines.dsh`
+
+内核实现：`@deepseek-ai/dsh-app-boot` 的 `lib/types/plugin-compatibility.js`
+（asar 内，2026-10-18 读源码确认）：
+
+```js
+function satisfies(runtimeVersion, range) {
+  return range.trim() !== '' && semver.satisfies(runtimeVersion, range, { includePrerelease: true });
+}
+function unmetRequirements(fields, runtimeVersion) {
+  const engines = ...;
+  if (Object.hasOwn(engines, 'dsh')) {          // ← 声明了就"独裁"
+    return satisfies(runtimeVersion, engines.dsh) ? {} : { 'engines.dsh': engines.dsh };
+  }
+  if (!Object.hasOwn(fields, 'peerDependencies')) return {};
+  for (const [name, range] of Object.entries(fields.peerDependencies)) {
+    if (name !== '@deepseek-ai/dsh' && !name.startsWith('@deepseek-ai/dsh-')) continue;   // ← 只认 dsh 系
+    if (!satisfies(runtimeVersion, range)) unmet[name] = range;
+  }
+  return unmet;
+}
+```
+
+两条关键行为：
+
+1. **`engines.dsh` 一旦声明就完全接管**，`peerDependencies` 被忽略。
+2. 没声明时，**只检查 `@deepseek-ai/dsh` 与 `@deepseek-ai/dsh-*` 开头的 peer** ——
+   本插件的 peer 是 `@deepseek-ai/cordis` 和 `@deepseek-ai/schemastery`，
+   **都不匹配**，所以当前判定结果是"无版本要求"=任何 DSH 版本都放行。
+
+### 为什么不声明（实测推算，2026-10-18）
+
+用内核同款语义（`includePrerelease: true`）算过：
+
+| manifest | DSH 0.2.1-rc.2 | 0.2.1-alpha.2 | 0.2.0 |
+|---|---|---|---|
+| **当前：无 `engines.dsh`** | 通过 | 通过 | 通过 |
+| `>=0.2.1-rc.1` | 通过 | **拒绝** | **拒绝** |
+| `>=0.2.1-rc.2` | 通过 | **拒绝** | **拒绝** |
+
+本插件是**纯客户端着色**，用的是内核的 CSS Module 类名后缀与语义化 `data-*` 属性，
+对内核版本没有硬依赖。声明 `engines.dsh` 只会**把"永远兼容"变成"拒绝旧版本"** ——
+对用户是净损失，对被判定为不兼容的版本也没有任何实际保护作用。
+
+**结论**：保持不声明。**只有当真的用了某个版本才有的内核能力**（且旧版本会崩/白屏）时，
+才加 `engines.dsh`，范围写实际下限（如 `>=0.2.1-rc.1`），并按上表核对一遍。
+
+⚠️ 顺带记两条 rc.2 相关事实：
+- **前端 seed 表从 9 项增至 11 项**（新增 `zod`、`@tanstack/react-virtual`）。
+  `SEED_MODULES` 不必跟着扩 —— **越窄越安全**，我们只用那 9 个。
+- seed 表里的函数名每次构建都会变，**按 `staticModules` 定位，不要 grep 函数名**。
 
 ## 4. 禁区（冻结实现，改了会让已验证功能失效）
 
