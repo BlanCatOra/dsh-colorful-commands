@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  ACTIVITY_LABELS,
   classifyAttrs,
   commandCategory,
   hasTitleDetail,
@@ -469,6 +470,57 @@ test('saturationCap 只影响声明了它的类别（不能顺手压低别人）
   const map2 = { web: { light: '#999999', dark: '#999999' } };
   applySaturationCaps(map2, { web: { saturationCap: 48 } });
   assert.equal(map2.web.light, '#999999', '低饱和色被改动了（应原样保留）');
+});
+
+test('内核 14 个 activity 值必须全部映射到真实类别（不能悬空）', () => {
+  // 用户 2026-10-17：「要包含 dsh 所有的 tag」。
+  //
+  // 内核 `data-process-activity` 的取值决定了「已读取图片」「已协调子智能体」
+  // 「已访问网页」「更新了计划」「向用户提出了问题」「运行了代码」「已调用工具」
+  // 这些标签能不能上色。任何一个值映射不到真实类别，对应标签就会**静默不上色**。
+  //
+  // ⚠️ `commands` / `tools` 走 `commandCategory()` 再细分三档，不直接落类别，
+  //    所以排除在"必须等于某个类别"的检查之外（但仍要求能分出三档，见下）。
+  const ACTIVITY = _tables.ACTIVITY_CATEGORY;
+  const categories = new Set(ALL_CATEGORIES);
+
+  const activities = Object.keys(ACTIVITY);
+  assert.ok(
+    activities.length >= 14,
+    `activity 映射只有 ${activities.length} 项，内核已知有 14 个（reads/writes/web/subagents/…），`
+      + '少映射会导致对应标签不上色',
+  );
+
+  const dangling = [];
+  for (const [activity, category] of Object.entries(ACTIVITY)) {
+    if (activity === 'commands' || activity === 'tools') continue;
+    if (!categories.has(category)) dangling.push(`${activity} → ${category}`);
+  }
+  assert.deepEqual(dangling, [], `这些 activity 映射到了不存在的类别：${dangling.join('、')}`);
+
+  // 聚合类（commands / tools）必须能经 commandCategory 分出三档，
+  // 否则「已调用工具」这类标签会拿不到颜色（调色板里没有裸 `command`）。
+  for (const activity of ['commands', 'tools']) {
+    const cat = classifyAttrs({ 'data-process-activity': activity }, { text: '执行了命令' });
+    assert.ok(
+      ['commandLow', 'commandMid', 'commandHigh'].includes(cat),
+      `activity「${activity}」未能细分成命令三档（得到 ${cat}）`,
+    );
+  }
+});
+
+test('内核 14 条 done.* 文案必须都能被识别（含子代理/图片/计划/提问）', () => {
+  // 与 aggregate-titles.test.mjs 的第一层根因同源：
+  // `ACTIVITY_LABELS` 曾只覆盖 14 条内核文案里的 6 条，导致
+  // 「已读取图片」「已协调子智能体」「已调用工具」「更新了计划」「向用户提出了问题」
+  // 这些标签**未被识别** → 聚合判据少算 → 用户反馈"只解决了一半"。
+  const KERNEL_ZH = [
+    '已完成分析', '已读取文件', '已读取图片', '已写入文件', '已搜索代码',
+    '修改了文件', '执行了命令', '运行了代码', '已搜索网页', '已访问网页',
+    '已协调子智能体', '更新了计划', '向用户提出了问题', '已调用工具',
+  ];
+  const missing = KERNEL_ZH.filter((label) => !Object.hasOwn(ACTIVITY_LABELS, label));
+  assert.deepEqual(missing, [], `ACTIVITY_LABELS 缺少这些内核文案：${missing.join('、')}`);
 });
 
 test('命令三级必须是「三级红」：三档色相都在红色系内，只靠饱和度递增', () => {
