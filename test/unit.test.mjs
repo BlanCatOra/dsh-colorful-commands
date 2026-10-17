@@ -522,6 +522,21 @@ test('内核 14 个 activity 值必须全部映射到真实类别（不能悬空
   );
 });
 
+test('通用工具行 data-variant="single" 必须归 other（不能不打标变灰）', () => {
+  // 用户 2026-10-17：「读取任务输出 未上色」。
+  // 真机探针实测：`data-tool` 在整个 DOM 里只出现 1 次，通用工具行
+  // （job_output / job_list / present / todo_write …）**不带 data-tool**，
+  // 只带 `data-variant="single"`。本表原本没有 single → base=null → 不打标 → 永远灰。
+  assert.equal(
+    classifyAttrs({ 'data-variant': 'single' }, { text: '读取任务输出' }),
+    'other',
+    'single 变体必须落到 other，否则通用工具行永远不上色',
+  );
+  // 反向守卫：加了 single 不能顺手把具名变体也并进 other。
+  assert.equal(classifyAttrs({ 'data-variant': 'read' }, { text: '读取' }), 'read');
+  assert.equal(classifyAttrs({ 'data-variant': 'bash' }, { text: '运行命令' }), 'commandLow');
+});
+
 test('内核 14 条 done.* 文案必须都能被识别（含子代理/图片/计划/提问）', () => {
   // 与 aggregate-titles.test.mjs 的第一层根因同源：
   // `ACTIVITY_LABELS` 曾只覆盖 14 条内核文案里的 6 条，导致

@@ -65,6 +65,16 @@ const VARIANT_CATEGORY = {
   search: 'search',
   code: 'write',
   others: 'other',
+  // `single`：**单次调用的通用工具行**（`job_output` / `job_list` / `present` /
+  // `todo_write` 这类非文件、非搜索、非命令的工具）。
+  //
+  // ⚠️ 2026-10-17 用户反馈「读取任务输出 未上色」。真机探针实测：
+  //   `tools=read_image  variants=think|bash|read|single`
+  // 整个 DOM 里 `data-tool` 只出现 1 次 —— **通用工具行不带 `data-tool`**，
+  // 只带 `data-variant="single"`。而本表原本没有 `single`，
+  // 于是 `base` 落到 `null` → **整行不打标** → 永远是原生灰。
+  // 归 `other`（中性色）——“被调用了但不知道具体是哪类”正是 `other` 的语义。
+  single: 'other',
 };
 
 /**
