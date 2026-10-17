@@ -2,6 +2,11 @@
 
 [中文](README.md) | English
 
+> 🤖 **For AI agents**: before changing this repo, read [AGENTS.md](./AGENTS.md)
+> (how to change it: verification commands, build artifacts, hard constraints,
+> off-limits areas, repo-specific gotchas) and [llms.txt](./llms.txt)
+> (what it does, doc index, known limits). Humans can skip this line.
+
 Color the DeepSeek Harness interface **by category**: thinking, commands (**graded by risk**), file reads, writes, search, web requests, other tools. Interface controls near the composer (permission select, plan mode) can be colored separately, and the permission select **recolors itself per access level**.
 
 Ships with three preset palettes — **Chinese traditional (default)**, **Japanese traditional**, and **Macaron** — and lets you set every category by hand, with separate colors for light and dark themes.
