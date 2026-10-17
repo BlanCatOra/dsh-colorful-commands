@@ -42,11 +42,9 @@
     "test": "node src/build-client.mjs && node --test test/*.test.mjs",
     "check": "node --check src/index.js && node --check src/config.js && node --check src/classify.js && node --check src/css.js && node --check lib/client.js"
   },
-  "dependencies": {
-    "@deepseek-ai/schemastery": "3.18.4"
-  },
   "peerDependencies": {
-    "@deepseek-ai/cordis": ">=4.0.1-rc.1 <5.0.0 || >=4.0.2 <5.0.0"
+    "@deepseek-ai/cordis": ">=4.0.1-rc.1 <5.0.0 || >=4.0.2 <5.0.0",
+    "@deepseek-ai/schemastery": "^3.18.0"
   },
   "dsh": {
     "manifestVersion": 1,
