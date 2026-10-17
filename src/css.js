@@ -300,6 +300,31 @@ function categoryBranch(category, color, prefix = '') {
     `${header} svg{color:${color}}`,
     `${titleSel}{color:${color}}`,
 
+    // ①b 过程组**内层行**的整行文字（2026-10-17 新增）。
+    //
+    // 用户反馈（截图）：「创建子智能体」「更新任务清单」「提问」这些**组内行**
+    // 全是灰的，只有组标题有颜色。
+    //
+    // 真机结构实测（探针 dump，`_root_k7ery_9` 为过程组根）：
+    //
+    //   DIV._root_k7ery_9                     ← 我们打 data-cc-cat 的地方
+    //     DIV._header_k7ery_16[data-disclosure-header]
+    //       DIV._row_k7ery_26[data-disclosure-row]      ← 内层行
+    //         SPAN._leading_k7ery_50  ← 图标（svg，① 已覆盖）
+    //         SPAN._root_1rdzk_1      ← **文字**（没有 `_title` 类！）
+    //
+    // ⚠️ 内层行**没有任何 `data-tool` / `data-sample` / `data-activity` 钩子**
+    //    （探针 dump 全部属性：只有 `data-disclosure-row` / `data-expandable` /
+    //    `role` / `aria-expanded`）。它跟「读取」「编辑」「思考」只差 CSS Module
+    //    的类名后缀（`ZmL7Ga_row` 推理 / `Ph6Lgq_row` 工具），**分不出具体活动**。
+    //    所以无法逐行判定语义 —— 只能让内层行**继承所属组的颜色**。
+    //
+    // ⚠️ 代价（已知且刻意接受）：一个组里混了多种活动时，组被判成 `summary`
+    //    （中性靛蓝），那么组内每行都会是靛蓝，而不是各自语义色。
+    //    这仍然是"整组一个颜色"的一致读法，比一半灰一半彩要好。
+    //    若将来要逐行语义色，只能靠**文字匹配**（多语言、易碎），不建议。
+    `${header} [data-disclosure-row]{color:${color}}`,
+
     // ② 过程组标题（"执行了命令 / 已完成分析 / 已读取文件"）。
     //    这是用户反馈"运行命令、执行命令、完成分析等条目颜色没有改变"的那批
     //    —— 它们带 `data-process-activity` 而**不带 `data-tool`**，第一版没覆盖。

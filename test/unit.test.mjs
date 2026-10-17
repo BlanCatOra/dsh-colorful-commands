@@ -848,6 +848,26 @@ test('每个作用域都必须给 svg 上色（漏掉就会出现"文字有色�
   }
 });
 
+test('header 作用域必须给过程组内层行 [data-disclosure-row] 上色', () => {
+  // 用户 2026-10-17（截图反馈）：「创建子智能体」「更新任务清单」这些**组内行**
+  // 没上色，只有组标题有颜色。
+  //
+  // 真机结构实测：内层行的文字在 `SPAN._root_1rdzk_1` 里，**没有 `_title` 类**，
+  // 所以旧的 `[class*="_title"]` 规则一条都命中不到 → 行文字恒为原生灰。
+  // 内层行也**没有任何 data-* 语义钩子**，无法逐行判语义，只能继承所属组的颜色。
+  //
+  // 这条测试锁住"确实存在一条给 [data-disclosure-row] 上色的规则"。
+  const css = buildStylesheet({ thinking: { light: '#8A4B9C', dark: '#B5A0C2' } });
+  const rowRules = css.split('\n').filter(
+    (l) => l.includes('[data-cc-scope="header"]') && l.includes('[data-disclosure-row]') && l.includes('{color:'),
+  );
+  assert.ok(
+    rowRules.length > 0,
+    'header 作用域缺少 [data-disclosure-row] 的上色规则 → 过程组内层行（创建子智能体/'
+      + '更新任务清单/提问/思考）会全部是灰的',
+  );
+});
+
 
 test('others 通用命令卡片：旧判据已废（标题文字不再是压缩判据）', () => {
   // ⚠️⚠️ 这条断言在 2026-10-17 被**证伪并改写**，别按旧版"修回去"。
