@@ -189,6 +189,29 @@ DIV.ZmL7Ga_root[data-cc-cat="thinking"]   ← 打标元素，**不带 data-proce
 
 ⚠️ **`git push`、建远端、发 PR/issue 必须先得到维护者明确同意**，不要自行推送。
 
+### 🔴 发版必须重新打包（踩过一次）
+
+预构建包挂在 GitHub Release 上，供市场/用户按
+`releases/latest/download/dsh-colorful-commands.tgz` 直接安装。
+**这个 tarball 是 `npm pack` 的静态快照，不会随仓库更新自动重建。**
+
+已经踩过：`v0.2.0` 的 tarball 在 `locale/*.json` **之前**打的包，
+于是包里有代码但没有官方展示元信息（插件页标题/描述仍回退到 `package.json`），
+等于那份元信息白加。
+
+**规矩**：只要改了会被打进包的路径（`src/`、`lib/`、`docs/`、`locale/`、`icon.svg`、
+`package.json` 的 `files`），**发版时就必须**：
+
+```sh
+npm test                                  # 先全绿（含构建）
+npm pack                                  # 重新生成 .tgz
+gh release upload v<x.y.z> dsh-colorful-commands-<x.y.z>.tgz --clobber
+```
+
+并且**保持资产名不带版本号**（否则 `latest/download/` 链接会静默 404，
+见 awesome-list 的规则说明）。
+
+
 发布流程（GitHub topic、npm 包名、`locale/en.json` 元信息、图标约束）
 见 DSH 官方文档 `docs/cookbook/adding-a-package.md`。
 

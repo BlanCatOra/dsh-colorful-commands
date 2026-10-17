@@ -1,5 +1,23 @@
 # 更新日志
 
+## Unreleased
+
+### 新增
+
+- **官方插件展示元信息**：`locale/en.json` + `locale/zh.json`（`meta.title` /
+  `meta.description`），`package.json` 的 `exports` 开放 `./locale/*.json`、
+  `files` 加入 `locale`。此前缺失时官方发现机制会静默回退到 `package.json`。
+
+### 文档
+
+- `AGENTS.md` 新增 §0「本仓库在多插件工作区里的位置」（真身 / 软链 / 单向同步）。
+- `AGENTS.md` §7 新增「发版必须重新打包」硬规矩。
+
+### ⚠️ 发版待办（0.2.1）
+
+`v0.2.0` 的 Release tarball 打于 `locale/` **之前**，包内没有展示元信息。
+**0.2.1 必须 `npm pack` 重新打包并重传 Release 资产**，否则插件页标题/描述仍走回退。
+
 ## 0.2.0
 
 首个公开发布版本。
