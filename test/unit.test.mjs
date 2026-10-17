@@ -15,7 +15,7 @@ import {
   _tables,
 } from '../src/classify.js';
 import { buildStylesheet, resolveColors, sanitizeColor, CAT_ATTR, SCOPE_ATTR } from '../src/css.js';
-import { presetColors, presetColorFor, presetCoverage } from '../src/palettes.js';
+import { presetColors, presetColorFor, presetCoverage, hexToHsl, applySaturationCaps } from '../src/palettes.js';
 import { CHINESE_COLORS } from '../src/data/chinese-colors.js';
 import {
   contrast,
@@ -403,6 +403,72 @@ test('每套预设的两套主题都必须达到对比度下限（这是选色�
       assert.ok(cd <= 10.5, `${id}/${category} 深色值 ${pair.dark} 对比度过高（近白）`);
     }
   }
+});
+
+test('saturationCap：web（访问/搜索网页）饱和度必须被压到上限内', () => {
+  // 用户 2026-10-17：「顺便一提 访问搜索网页的蓝色饱和度太高了」。
+  //
+  // 实测原值（chinese）：light `#2A52BE`（HSL s≈64）/ dark `#4F84FF`（**s≈100**，
+  // 色库里的"绀青"）—— 深色主题那个尤其刺眼。
+  //
+  // ⚠️ 这里守的是 `saturationCap` 这条**限幅**机制生效，而不是某个具体 hex。
+  //    为什么不用 `maxSaturation`（过滤候选）见 palettes.js 中 SEMANTICS.web 的注释：
+  //    色库在 h≈230 极稀疏，过滤会把 chinese 逼成"浅深同色"且与 read 几乎一样。
+  const CAP = 48;
+  for (const id of ['chinese', 'japanese', 'macaron']) {
+    const { web } = presetColors(id);
+    assert.ok(web !== undefined, `${id}: 缺少 web 类别`);
+    for (const theme of ['light', 'dark']) {
+      const { s } = hexToHsl(web[theme]);
+      assert.ok(
+        s <= CAP + 0.5,
+        `${id}/web.${theme} = ${web[theme]} 的饱和度 ${s.toFixed(1)}% 超过上限 ${CAP}%`
+          + '（用户要求降低"访问搜索网页"的蓝色饱和度）',
+      );
+    }
+    // 限幅不能把颜色压成灰色 —— 仍必须是可辨识的蓝（色相在 200-245）。
+    for (const theme of ['light', 'dark']) {
+      const { h } = hexToHsl(web[theme]);
+      assert.ok(
+        h >= 200 && h <= 245,
+        `${id}/web.${theme} 色相 ${h.toFixed(0)}° 已偏离蓝色区间（限幅过度）`,
+      );
+    }
+  }
+});
+
+test('saturationCap 只影响声明了它的类别（不能顺手压低别人）', () => {
+  // ⚠️ 关键点：`applySaturationCaps` 必须**按 spec 逐项**处理，
+  //    不能对所有类别一刀切。直接拿合成数据单测它，比拿真实预设当哨兵可靠 ——
+  //    真实预设里各色相能到达的饱和度天然不同（例如 write 的墨绿本来就 ~44%），
+  //    用"饱和度应 > 48"当哨兵会误报。
+  const map = {
+    web: { light: '#4F84FF', dark: '#4F84FF', lightName: 'w', darkName: 'w' },
+    untouched: { light: '#DE2A18', dark: '#7FC49B', lightName: 'u', darkName: 'u' },
+  };
+  const before = { ...map.untouched };
+  // ⚠️ `specs` 里必须真的放一个**没有** saturationCap 的键，否则测不出"一刀切"：
+  //    若只传 web，实现即使无视 spec、对所有类别都限幅，也切不到别的键，
+  //    断言会**假绿**（实测踩过：把实现变异成 `const cap = 48` 后本测试仍然通过）。
+  applySaturationCaps(map, {
+    web: { hue: 230, saturationCap: 48 },
+    untouched: { hue: 25, minSaturation: 5 },
+  });
+
+  // 声明了上限的类别：被压到上限（色相/亮度保持）。
+  const capped = hexToHsl(map.web.light);
+  assert.ok(capped.s <= 48.5, `web 未被限幅：饱和度 ${capped.s.toFixed(1)}%`);
+  assert.ok(Math.abs(capped.h - hexToHsl('#4F84FF').h) < 2, 'web 色相被意外改变');
+  assert.ok(Math.abs(capped.l - hexToHsl('#4F84FF').l) < 2, 'web 亮度被意外改变');
+
+  // 没声明的类别：必须原样不动（这是本测试的核心断言）。
+  assert.equal(map.untouched.light, before.light, '未声明 saturationCap 的类别被改动了 light');
+  assert.equal(map.untouched.dark, before.dark, '未声明 saturationCap 的类别被改动了 dark');
+
+  // 已经是低饱和的色值不该被"反向提升"。
+  const map2 = { web: { light: '#999999', dark: '#999999' } };
+  applySaturationCaps(map2, { web: { saturationCap: 48 } });
+  assert.equal(map2.web.light, '#999999', '低饱和色被改动了（应原样保留）');
 });
 
 test('预设里每个色值都是合法十六进制', () => {

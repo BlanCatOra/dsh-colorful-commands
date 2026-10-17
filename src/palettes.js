@@ -41,7 +41,22 @@ const SEMANTICS = {
   read: { hue: 212 },
   write: { hue: 150 },
   search: { hue: 172 },
-  web: { hue: 230 },
+  // ⚠️ `web`（访问/搜索网页）：用户 2026-10-17 反馈「蓝色饱和度太高」。
+  //
+  // 实测问题：chinese 预设下 `web` 是 `#2A52BE`（s64）/ `#4F84FF`（**s100** = 色库里的"绀青"）。
+  // 深色主题那个尤其刺眼。
+  //
+  // ⚠️ 为什么**不能**用 `maxSaturation`：它是**过滤候选**。h≈230 在中文色库里极稀疏 ——
+  //    h205-210 那批低饱和亮蓝（星蓝/云水蓝/缥色/天青）都离 `read`(212) 更近，
+  //    `ownersOf` 的归属判定会判给 `read`，`web` 根本拿不到。实测把 `maxSaturation`
+  //    压到 52~58，chinese 直接退化成**浅深同色** `#4A6FA6`，且与 `read` 的 ΔE 仅 5
+  //    （几乎一模一样）；压到 ≥64 则完全不生效（`#4F84FF` 原样保留）。
+  //    → 过滤式上限在"色库稀疏 + 有归属判定"的前提下是死路。
+  //
+  // ✅ 改用 `saturationCap`（**对选中的色限幅**，不是过滤候选）：
+  //    引擎照常选出色 → 只把饱和度压到上限，保持色相与亮度。
+  //    既不改变"选哪个色"，也不会因为无候选而兜底成同色。
+  web: { hue: 230, saturationCap: 48 },
   // 重试是"等待/重来"语义，用琥珀橙（与"其他工具"的哑褐拉开，也和命令的红色系区分）。
   retry: { hue: 35, minSaturation: 30 },
   // 压缩是"上下文被收拢"的中性事件，用青蓝（与 read 的天青、search 的石绿拉开）。
@@ -49,6 +64,93 @@ const SEMANTICS = {
   other: { hue: 25, minSaturation: 5, maxSaturation: 45 },
   'ctl-plan': { hue: 285, minSaturation: 18 },
 };
+
+/**
+ * hex → HSL（H 0-360，S/L 0-100）。
+ *
+ * 只为本文件的 `saturationCap` 服务；不引第三方色彩库。
+ * @param hex `#RGB` 或 `#RRGGBB`。
+ * @returns `{ h, s, l }`。
+ */
+export function hexToHsl(hex) {
+  const raw = hex.replace('#', '');
+  const full = raw.length === 3 ? raw.split('').map((c) => c + c).join('') : raw;
+  const r = parseInt(full.slice(0, 2), 16) / 255;
+  const g = parseInt(full.slice(2, 4), 16) / 255;
+  const b = parseInt(full.slice(4, 6), 16) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  let h = 0;
+  let s = 0;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h *= 60;
+  }
+  return { h, s: s * 100, l: l * 100 };
+}
+
+/**
+ * HSL → hex。
+ * @param h 色相 0-360。
+ * @param s 饱和度 0-100。
+ * @param l 亮度 0-100。
+ * @returns `#RRGGBB`（大写）。
+ */
+function hslToHex(h, s, l) {
+  const sn = s / 100;
+  const ln = l / 100;
+  const c = (1 - Math.abs(2 * ln - 1)) * sn;
+  const hp = ((h % 360) + 360) % 360 / 60;
+  const x = c * (1 - Math.abs((hp % 2) - 1));
+  let rgb;
+  if (hp < 1) rgb = [c, x, 0];
+  else if (hp < 2) rgb = [x, c, 0];
+  else if (hp < 3) rgb = [0, c, x];
+  else if (hp < 4) rgb = [0, x, c];
+  else if (hp < 5) rgb = [x, 0, c];
+  else rgb = [c, 0, x];
+  const m = ln - c / 2;
+  const toHex = (v) => Math.round((v + m) * 255).toString(16).padStart(2, '0').toUpperCase();
+  return `#${toHex(rgb[0])}${toHex(rgb[1])}${toHex(rgb[2])}`;
+}
+
+/**
+ * 对已选出的色值施加「饱和度上限」（就地修改传入的 map）。
+ *
+ * ## 为什么需要它（而不是 `maxSaturation`）
+ *
+ * `maxSaturation` 是**过滤候选**：候选被过滤光了，`buildPalette` 会走补漏/兜底，
+ * 结果可能是"浅深同色"或与邻居撞色。色库稀疏时（h≈230 的中文蓝）这条死路。
+ *
+ * `saturationCap` 是**对已选中的色限幅**：保持色相与亮度，只把 S 压到上限。
+ * 好处是"选哪个色"完全不变，只调鲜艳度，因此不会引入新的兜底或撞色。
+ *
+ * ⚠️ 只处理 `spec.saturationCap` 存在、且该类别确实在 `map` 里的项。
+ * ⚠️ `lightName` / `darkName` 保留原值（限幅后色名不再精确，
+ *    但它只用于调试展示，比凭空编一个色名更诚实）。
+ *
+ * @param map 类别 → `{ light, dark, lightName, darkName }`（就地修改）。
+ * @param specs 语义规格表。
+ */
+export function applySaturationCaps(map, specs) {
+  for (const [key, spec] of Object.entries(specs)) {
+    const cap = spec.saturationCap;
+    if (typeof cap !== 'number') continue;
+    const pair = map[key];
+    if (pair === undefined) continue;
+    for (const theme of ['light', 'dark']) {
+      if (typeof pair[theme] !== 'string') continue;
+      const { h, s, l } = hexToHsl(pair[theme]);
+      if (s <= cap) continue;
+      pair[theme] = hslToHex(h, cap, l);
+    }
+  }
+}
 
 /**
  * 状态类配色（2026-10-17 新增）—— **固定色值，不从预设色库挑**。
@@ -319,6 +421,9 @@ export function presetColors(presetId) {
   }
   // 命令三档固定叠在预设之上（用户指定的红色系）。
   const content = { ...palette, ...RED_TIERS };
+  // 对上一步选出的内容色施加 `saturationCap`（若有）。
+  // ⚠️ 必须在 `buildPalette` **之后**、合并状态色**之前**做。
+  applySaturationCaps(content, SEMANTICS);
   // ⚠️ 状态类（消息尾部 / 输入框底部条）**单独选色**，并把内容类已用的色值
   //    传进去排除 —— 两组之间、以及组内都不能撞色。
   //    背景见 STATUS_SEMANTICS 的说明（并进内容区会抢走 read 的天然匹配色）。
