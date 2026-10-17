@@ -11,6 +11,8 @@
 - [AGENTS.md](./AGENTS.md) — **怎么改这个仓库**：验证命令、构建产物、硬性约束、
   禁区、本仓库特有的坑（**agent 入口**）
 - [CHANGELOG.md](./CHANGELOG.md) — 版本变更记录
+- [docs/DEMO-PROMPT.md](./docs/DEMO-PROMPT.md) — **一键配色自检 prompt**：
+  粘进 DSH 发一次就能点亮全部配色类别（安装后验证是否生效、或回归测试用）
 
 ## 能力（给要调用/集成它的 agent）
 

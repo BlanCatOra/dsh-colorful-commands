@@ -23,6 +23,7 @@
   },
   "files": [
     "src",
+    "docs",
     "lib",
     "cordis.patch.yml",
     "README.md",

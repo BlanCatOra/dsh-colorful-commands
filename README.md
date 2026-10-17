@@ -69,6 +69,9 @@
 
 桌面版（DeepSeek Harness Desktop）：**设置 → 插件 → 添加插件**，填包名 `dsh-colorful-commands`，然后重启应用。
 
+装好后**想一秒钟确认真生效**：复制 [docs/DEMO-PROMPT.md](./docs/DEMO-PROMPT.md) 里的那段 prompt
+发一次，它会一次点亮全部配色类别（含命令三档红、混合活动靛蓝、尾部用量/分支）。
+
 Web / CLI profile：
 
 ```sh

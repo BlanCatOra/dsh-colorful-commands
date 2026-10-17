@@ -40,6 +40,11 @@ Expanded command output, diffs, and file contents are **not** tinted: color appl
 
 Desktop (DeepSeek Harness Desktop): **Settings → Plugins → Add plugin**, enter `dsh-colorful-commands`, then restart the app.
 
+**To confirm it actually works in one shot**: copy the prompt from
+[docs/DEMO-PROMPT.md](./docs/DEMO-PROMPT.md) and send it once — it lights up every
+category at once (all three command risk tiers, the mixed-activity indigo,
+tail usage/branch).
+
 Web / CLI profile:
 
 ```sh

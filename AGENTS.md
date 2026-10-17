@@ -21,6 +21,11 @@ npm test          # = node src/build-client.mjs && node --test test/*.test.mjs
 构建期有额外断言（见 §4），曾经出现过"测试全绿、构建直接失败"的情况。
 所以：**只要碰了 `src/`，就先跑 `node src/build-client.mjs`**。
 
+**改配色 / 改分类逻辑后**，除了跑测试，还应发一次
+[`docs/DEMO-PROMPT.md`](./docs/DEMO-PROMPT.md) 里的 prompt 做真机回归 ——
+它会一次点亮全部类别，能立刻看出「命令三档是否还是三级红」「混合活动是否还是靛蓝」
+「尾部复制/点赞是否还是灰的」这类**测试抓不到的视觉回归**。
+
 其它入口：
 
 ```sh

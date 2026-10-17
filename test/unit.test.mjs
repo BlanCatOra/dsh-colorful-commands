@@ -471,6 +471,49 @@ test('saturationCap 只影响声明了它的类别（不能顺手压低别人）
   assert.equal(map2.web.light, '#999999', '低饱和色被改动了（应原样保留）');
 });
 
+test('命令三级必须是「三级红」：三档色相都在红色系内，只靠饱和度递增', () => {
+  // 用户 2026-10-17：「命令三级红还是**没有**实现」。
+  //
+  // 真机探针实测修前结果（分级逻辑是通的，但颜色不相干）：
+  //   低 `#C06F98` h330（藕粉）/ 中 `#D2568C` h338（洋红）/ 高 `#F04B22` h12（橙红）
+  // → 色相跨了半个色环，看起来是"粉 → 洋红 → 橙红"，不是三级红。
+  // 根因是 `buildRedTiers` 默认 `hueWindow: 40`（允许 325°..45°），
+  // 把品红/玫红/橙都算成"红色系"。修法：调用处传 `hueWindow: 20`。
+  //
+  // 这条测试就是那个不变式：**三档必须同属红色系，且饱和度递增**。
+  // 若有人把 hueWindow 改回 40，低/中档的色相会漂到 330±，本测试立刻变红。
+  const RED_CENTER = 5;
+  const RED_HALF = 24; // 允许 341°..29°，比实现用的 ±20 稍宽，留实现余量
+  const ORDER = ['commandLow', 'commandMid', 'commandHigh'];
+
+  for (const preset of ['chinese', 'japanese', 'macaron']) {
+    const palette = presetColors(preset);
+    const sat = [];
+    for (const key of ORDER) {
+      const pair = palette[key];
+      assert.ok(pair !== undefined, `${preset}: 缺少 ${key}`);
+      for (const theme of ['light', 'dark']) {
+        const { h, s } = hexToHsl(pair[theme]);
+        // 环形距离：h 与 5° 的差距
+        const raw = Math.abs(h - RED_CENTER) % 360;
+        const dist = raw > 180 ? 360 - raw : raw;
+        assert.ok(
+          dist <= RED_HALF,
+          `${preset}/${key}.${theme} = ${pair[theme]} 色相 ${h.toFixed(0)}° 偏离红色系`
+            + `（应距 ${RED_CENTER}° 不超过 ${RED_HALF}°）—— 命令三档必须都是红色，`
+            + ' 检查 palettes.js 的 buildRedTiers(…, { hueWindow }) 是否被改回默认 40',
+        );
+        if (theme === 'light') sat.push(s);
+      }
+    }
+    // 饱和度必须递增：越危险越浓。这是"分级"的实际可感知依据。
+    assert.ok(
+      sat[0] < sat[1] && sat[1] < sat[2],
+      `${preset}: 命令三档饱和度未递增（${sat.map((v) => v.toFixed(0) + '%').join(' → ')}）`,
+    );
+  }
+});
+
 test('预设里每个色值都是合法十六进制', () => {
   for (const id of ['chinese', 'japanese', 'macaron']) {
     for (const [category, pair] of Object.entries(presetColors(id))) {
