@@ -15,9 +15,6 @@ Ships with **traditional-color presets** (Chinese traditional, 742 colors / Japa
 > off-limits areas, repo-specific gotchas) and [llms.txt](llms.txt) (what it does,
 > doc index, known limits). Humans can skip this line.
 
-<!-- Screenshot placeholder: drop the image at docs/screenshot.png and uncomment below -->
-<!-- ![screenshot](docs/screenshot.png) -->
-
 ## What it colors
 
 | Category | What gets colored |
@@ -31,6 +28,13 @@ Ships with **traditional-color presets** (Chinese traditional, 742 colors / Japa
 | Other tools | Unclassified tools (neutral color) |
 | Status | “Done” success green, context-ring tiers, mixed-activity titles, tail usage / branch buttons |
 | UI controls | Permission selector (recolors per level), plan mode |
+
+![Colored by category: thinking / three command risk tiers / reads / writes / search / web / mixed activity / subagents / plan](docs/screenshot-demo.jpg)
+
+*Real result in dark theme — one color per category: thinking purple, commands in three red
+tiers by risk, reads and writes green, search teal, web indigo, mixed-activity groups in a
+unified indigo, subagents and plan in neutral tones.*
+
 
 ## Presets and customization
 
@@ -47,6 +51,13 @@ contrast against the real host background.
 swatch picker or raw hex, with one-click reset to preset. Settings live on the
 **plugin detail page** (see “Configure” below).
 
+![Plugin detail page: preset switch plus per-category light/dark swatches](docs/screenshot-settings.jpg)
+
+*The plugin detail page: switch presets at the top (Chinese traditional / Japanese traditional /
+Macaron / none), and every category below has a light and a dark swatch row plus hex inputs,
+with reset-to-preset available.*
+
+
 ## Why it's easy on the eyes
 
 - **Low saturation first** — no neon, no high-saturation pure red or blue.
@@ -58,6 +69,14 @@ swatch picker or raw hex, with one-click reset to preset. Settings live on the
   which is what actually tires your eyes.
 - **Turn any category down** — if something feels harsh, override that category's
   light/dark value with a softer one.
+
+## Status, usage and composer controls
+
+![Message tail buttons, compaction row, context ring, composer controls](docs/screenshot-tail.jpg)
+
+*Only “usage” and “branch” are colored in the message tail (copy / like / dislike keep their
+native grey). The “compacting” row, the context ring, and the permission / plan-mode controls
+near the composer each get their own color too.*
 
 ## Install
 
