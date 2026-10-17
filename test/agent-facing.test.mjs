@@ -137,9 +137,12 @@ test('指路引用的文件真实存在（相对链接不能写错）', async ()
 test('这些会公开的文件不得含本机私有信息（脱敏）', () => {
   // 规范 §5 最后一条 + 全局 AGENTS.md 的脱敏要求。
   const forbidden = [
-    { re: /REDACTED@qq\.com/, what: '号主私人邮箱' },
+    // ⚠️ 这里**不写死具体私人邮箱**：本文件本身是公开的，
+    //    把要防的地址原文写进来等于自己泄漏一次（已踩过）。
+    //    改为"任何非 agent 的 qq.com 邮箱"这种泛化判据。
+    { re: /[\w.+-]+@qq\.com/g, what: '非 agent 的 qq.com 邮箱', allow: ['blancatora@agent.qq.com'] },
     { re: /192\.168\.\d+\.\d+/, what: '内网 IP' },
-    { re: /\/home\/blancat\b/, what: '本机绝对路径（含用户名）' },
+    { re: /\/home\/[a-z][\w-]*\b/, what: '本机绝对路径（含用户名）' },
   ];
   // ⚠️ 注意 **不要**把 `blancatora@agent.qq.com` 列为禁止项：
   //    它是全局规范指定的**公开通讯邮箱**，也是本仓库的提交身份
@@ -149,8 +152,13 @@ test('这些会公开的文件不得含本机私有信息（脱敏）', () => {
   const hits = [];
   for (const [name, content] of Object.entries(files)) {
     if (content === undefined) continue;
-    for (const { re, what } of forbidden) {
-      if (re.test(content)) hits.push(`${name} 含${what}（${re.source}）`);
+    for (const { re, what, allow } of forbidden) {
+      const pattern = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
+      for (const match of content.matchAll(pattern)) {
+        const hit = match[0];
+        if (allow !== undefined && allow.includes(hit)) continue; // 允许的公开地址
+        hits.push(`${name} 含${what}：${hit}`);
+      }
     }
   }
   assert.deepEqual(hits, [], `公开文件里出现私有信息：\n${hits.join('\n')}`);
