@@ -91,8 +91,16 @@ const KIND_CATEGORY = {
  * plan / questions / subagents / tools / webFetch / webSearch。
  * 未列出的取值落 `other`，因此宿主以后新增活动类型也会被着色，不会漏。
  *
- * `tools` / `commands` 是**聚合**类（"已调用工具"/"执行了命令"），归 command
- * 更符合直觉 —— 用户看到的就是一串命令。
+ * ⚠️ `commands`（「执行了命令」）是**聚合**类，先归 `command` 再由
+ * `commandCategory()` 按标题文本细分三档 —— 调色板里没有裸 `command`，
+ * 不细分会让整类拿不到颜色。
+ *
+ * ⚠️ `tools`（「已调用工具」）**刻意归 `other`**，不归 `command`。
+ *
+ * 2026-10-17 调整（用户确认）：这个标签的含义是"调用了某个工具，但内核没给出
+ * 具体活动类型"，它**不是命令**。归 `command` 会让它被染成命令红档，
+ * 而且还要过一遍 `commandRisk()` —— 拿一段泛化文案去判"命令危险性"本身没有意义。
+ * 归 `other`（中性色）更诚实：用户看到的是"有个工具被调用了，仅此而已"。
  */
 const ACTIVITY_CATEGORY = {
   thinking: 'thinking',
@@ -104,7 +112,7 @@ const ACTIVITY_CATEGORY = {
   write: 'write',
   code: 'write',
   commands: 'command',
-  tools: 'command',
+  tools: 'other',
   webFetch: 'web',
   webSearch: 'web',
   subagents: 'other',

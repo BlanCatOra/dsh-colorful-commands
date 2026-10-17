@@ -110,10 +110,17 @@ test('过程组标题带分析正文时可按标签判定（避免正文被上�
 });
 
 test('过程组标题（执行了命令）也必须拿到颜色', () => {
-  // 内核 processActivity 把 commands/tools 当作聚合活动；调色板里没有裸 `command`
+  // 内核 processActivity 把 commands 当作聚合活动；调色板里没有裸 `command`
   // 类别，所以必须在这里细分风险，否则整类静默不着色（真机实测 69 个元素无颜色）。
   assert.equal(classifyAttrs({ 'data-process-activity': 'commands' }, { text: '执行了命令' }), 'commandLow');
-  assert.equal(classifyAttrs({ 'data-process-activity': 'tools' }, { text: '已调用工具' }), 'commandLow');
+  // ⚠️ `tools`（「已调用工具」）**不是命令**：2026-10-17 用户确认改为归 `other`。
+  //    它表示"调用了内核未给出具体类型的工具"，不该被染成命令红档，
+  //    也不该拿泛化文案去过 commandRisk()。
+  assert.equal(
+    classifyAttrs({ 'data-process-activity': 'tools' }, { text: '已调用工具' }),
+    'other',
+    '「已调用工具」必须归中性色 other，不能当成命令',
+  );
   assert.equal(
     classifyAttrs({ 'data-process-activity': 'commands' }, { text: '正在运行命令 · sudo systemctl restart x' }),
     'commandMid',
@@ -493,20 +500,26 @@ test('内核 14 个 activity 值必须全部映射到真实类别（不能悬空
 
   const dangling = [];
   for (const [activity, category] of Object.entries(ACTIVITY)) {
-    if (activity === 'commands' || activity === 'tools') continue;
+    if (activity === 'commands') continue; // 走 commandCategory 细分，不直接落类别
     if (!categories.has(category)) dangling.push(`${activity} → ${category}`);
   }
   assert.deepEqual(dangling, [], `这些 activity 映射到了不存在的类别：${dangling.join('、')}`);
 
-  // 聚合类（commands / tools）必须能经 commandCategory 分出三档，
-  // 否则「已调用工具」这类标签会拿不到颜色（调色板里没有裸 `command`）。
-  for (const activity of ['commands', 'tools']) {
-    const cat = classifyAttrs({ 'data-process-activity': activity }, { text: '执行了命令' });
-    assert.ok(
-      ['commandLow', 'commandMid', 'commandHigh'].includes(cat),
-      `activity「${activity}」未能细分成命令三档（得到 ${cat}）`,
-    );
-  }
+  // `commands` 必须能经 commandCategory 分出三档，
+  // 否则「执行了命令」拿不到颜色（调色板里没有裸 `command`）。
+  const commandCat = classifyAttrs({ 'data-process-activity': 'commands' }, { text: '执行了命令' });
+  assert.ok(
+    ['commandLow', 'commandMid', 'commandHigh'].includes(commandCat),
+    `activity「commands」未能细分成命令三档（得到 ${commandCat}）`,
+  );
+
+  // ⚠️ `tools`（「已调用工具」）**不得**再被当成命令（2026-10-17 用户确认）。
+  //    它必须直接落中性 `other`，而不是走命令风险细分。
+  assert.equal(
+    classifyAttrs({ 'data-process-activity': 'tools' }, { text: '已调用工具' }),
+    'other',
+    '「已调用工具」必须归 other；若变红说明 ACTIVITY_CATEGORY.tools 被改回 command',
+  );
 });
 
 test('内核 14 条 done.* 文案必须都能被识别（含子代理/图片/计划/提问）', () => {
