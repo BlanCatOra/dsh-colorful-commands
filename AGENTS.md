@@ -129,6 +129,36 @@ npm run check     # 只做语法检查（不跑逻辑）
 不要引用历史取证报告里的结构结论（踩过：上轮报告说"复制按钮在某个插槽内"，
 本轮真机实测它在外面，导致第一版改法只修好一半）。
 
+### 5.6 过程组「内层行」的文字**不能**用简单办法染色（已试过，回退）
+
+用户 2026-10-17 两轮反馈：先是「创建子智能体/更新任务清单没上色」，
+在我改成整行染色后立刻指出「**思考的正文错误染色**」。
+
+真机实测（探针 dump，别再重复踩）：
+
+```
+DIV.ZmL7Ga_root[data-cc-cat="thinking"]   ← 打标元素，**不带 data-process-activity**
+  DIV._root_k7ery_9
+    DIV._header_k7ery_16[data-disclosure-header]
+      DIV._row_k7ery_26[data-disclosure-row]
+        SPAN._leading                    ← 图标（svg 规则已覆盖）
+        SPAN._root_1rdzk_1
+          SPAN._content_1rdzk_11          ← 文字
+```
+
+四个卡点：
+
+1. 内层行**没有任何语义钩子**（全部属性只有 `data-disclosure-row` /
+   `data-expandable` / `role` / `aria-expanded`），分不出是「思考」还是「读取」；
+2. 文字在 `_content_1rdzk_11` 里，**没有 `_title` 类** → 旧规则命中不到；
+3. 行文本里**没有字面 ` · `** —— 截图里那个分隔符是 **CSS 伪元素**画的，
+   所以"按分隔符切出标签"（`splitTitleLabel` 那套）**切不到**；
+4. 打标元素不带 `data-process-activity`，按该属性触发的切分逻辑不会跑。
+
+**结论**：当前只染内层行的**图标**，文字保持原生色（宁可不染，也不能染正文）。
+要做"只染标签"，需要内核给出标签/正文的独立 DOM 钩子，或改走**多语言文字匹配**
+（易碎，不推荐）。**不要再试"整行染色"** —— 用户明确拒绝。
+
 ## 6. 提交规范
 
 ```sh
