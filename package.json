@@ -20,7 +20,8 @@
     ".": "./src/index.js",
     "./client": "./lib/client.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./icon": "./icon.svg"
   },
   "files": [
     "src",
@@ -30,7 +31,8 @@
     "README.md",
     "README.en.md",
     "CHANGELOG.md",
-    "LICENSE"
+    "LICENSE",
+    "icon.svg"
   ],
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
@@ -71,5 +73,6 @@
   "bugs": {
     "url": "https://github.com/BlanCatOra/dsh-colorful-commands/issues"
   },
-  "private": true
+  "private": true,
+  "icon": "./icon.svg"
 }
