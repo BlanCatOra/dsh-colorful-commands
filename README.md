@@ -69,13 +69,21 @@
 
 ## 安装
 
-**桌面版**：设置 → 插件 → 添加插件，填 `dsh-colorful-commands`，重启应用。
+> 目前通过 **GitHub** 分发（尚未发布到 npm），所以用 Git 地址安装。
+
+**桌面版**：设置 → 插件 → 添加插件，填下面这个地址，然后重启应用：
+
+```
+https://github.com/BlanCatOra/dsh-colorful-commands
+```
 
 **Web / CLI profile**：
 
 ```sh
-dsh plugin --profile <profile> add dsh-colorful-commands
+dsh plugin --profile <profile> add https://github.com/BlanCatOra/dsh-colorful-commands
 ```
+
+<sub>若之后发布到 npm，也可以直接用包名 `dsh-colorful-commands`。</sub>
 
 ## 一分钟确认它真的生效
 

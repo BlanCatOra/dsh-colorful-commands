@@ -80,13 +80,21 @@ near the composer each get their own color too.*
 
 ## Install
 
-**Desktop**: Settings → Plugins → Add plugin, enter `dsh-colorful-commands`, restart the app.
+> Currently distributed via **GitHub** (not yet published to npm), so install from the Git URL.
+
+**Desktop**: Settings → Plugins → Add plugin, paste the URL below, then restart the app:
+
+```
+https://github.com/BlanCatOra/dsh-colorful-commands
+```
 
 **Web / CLI profile**:
 
 ```sh
-dsh plugin --profile <profile> add dsh-colorful-commands
+dsh plugin --profile <profile> add https://github.com/BlanCatOra/dsh-colorful-commands
 ```
+
+<sub>If it gets published to npm later, the bare package name `dsh-colorful-commands` will work too.</sub>
 
 ## Confirm it actually works in one minute
 
