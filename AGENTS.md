@@ -89,57 +89,47 @@ npm run check    # 只做语法检查
    第三方客户端 bundle 是惰性加载的，不声明会在建 entry 之前赶不上预取，
    偶发 `import failed` → 整站白屏，而插件自己的启动报告可能还是 `ok: true`。
 
-### 3.5 DSH 版本判定：**不要**随手声明 `engines.dsh`
+### 3.5 DSH 版本判定：`engines.dsh` 的取值规则
 
-内核实现：`@deepseek-ai/dsh-app-boot` 的 `lib/types/plugin-compatibility.js`
-（asar 内，2026-10-18 读源码确认）：
+插件清单里的 `engines.dsh` 由内核 `@deepseek-ai/dsh-app-boot` 判定（源码已核对）：
 
 ```js
-function satisfies(runtimeVersion, range) {
-  return range.trim() !== '' && semver.satisfies(runtimeVersion, range, { includePrerelease: true });
+if (Object.hasOwn(engines, "dsh")) {
+  return satisfies(runtimeVersion, range) ? {} : { "engines.dsh": range }   // 声明了就只看它
 }
-function unmetRequirements(fields, runtimeVersion) {
-  const engines = ...;
-  if (Object.hasOwn(engines, 'dsh')) {          // ← 声明了就"独裁"
-    return satisfies(runtimeVersion, engines.dsh) ? {} : { 'engines.dsh': engines.dsh };
-  }
-  if (!Object.hasOwn(fields, 'peerDependencies')) return {};
-  for (const [name, range] of Object.entries(fields.peerDependencies)) {
-    if (name !== '@deepseek-ai/dsh' && !name.startsWith('@deepseek-ai/dsh-')) continue;   // ← 只认 dsh 系
-    if (!satisfies(runtimeVersion, range)) unmet[name] = range;
-  }
-  return unmet;
-}
+// 否则只检查以 @deepseek-ai/dsh 或 @deepseek-ai/dsh-* 开头的 peer
 ```
 
-两条关键行为：
+两条关键语义：
 
-1. **`engines.dsh` 一旦声明就完全接管**，`peerDependencies` 被忽略。
-2. 没声明时，**只检查 `@deepseek-ai/dsh` 与 `@deepseek-ai/dsh-*` 开头的 peer** ——
-   本插件的 peer 是 `@deepseek-ai/cordis` 和 `@deepseek-ai/schemastery`，
-   **都不匹配**，所以当前判定结果是"无版本要求"=任何 DSH 版本都放行。
+1. **声明了 `engines.dsh` → 独占判定，`peerDependencies` 被完全忽略。**
+2. **没声明 → 只检查 `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` 开头的 peer。**
+   本插件的 peer 是 `@deepseek-ai/cordis` 与 `@deepseek-ai/schemastery`，**都不匹配**，
+   所以不声明时的判定结果是「无版本要求」= 任何 DSH 版本都放行。
 
-### 为什么不声明（实测推算，2026-10-18）
+### 当前取值：`>=0.2.0-0`（2026-10-18 定）
 
-用内核同款语义（`includePrerelease: true`）算过：
+用内核同款 semver（7.8.5，`includePrerelease: true`）实测：
 
-| manifest | DSH 0.2.1-rc.2 | 0.2.1-alpha.2 | 0.2.0 |
-|---|---|---|---|
-| **当前：无 `engines.dsh`** | 通过 | 通过 | 通过 |
-| `>=0.2.1-rc.1` | 通过 | **拒绝** | **拒绝** |
-| `>=0.2.1-rc.2` | 通过 | **拒绝** | **拒绝** |
+| manifest | DSH 0.2.1-rc.2 | 0.2.1-alpha.2 | 0.2.0 | 0.2.0-rc.2 | 0.1.7-rc.2 |
+|---|---|---|---|---|---|
+| 不声明 | 通过 | 通过 | 通过 | 通过 | 通过 |
+| **`>=0.2.0-0`（当前）** | **通过** | **通过** | **通过** | **通过** | **拒绝** |
+| `>=0.2.1-rc.1` | 通过 | 拒绝 | 拒绝 | 拒绝 | 拒绝 |
+| `>=0.2.0` | 通过 | 通过 | 通过 | **拒绝** | 拒绝 |
 
-本插件是**纯客户端着色**，用的是内核的 CSS Module 类名后缀与语义化 `data-*` 属性，
-对内核版本没有硬依赖。声明 `engines.dsh` 只会**把"永远兼容"变成"拒绝旧版本"** ——
-对用户是净损失，对被判定为不兼容的版本也没有任何实际保护作用。
+选 `>=0.2.0-0` 的理由：**表达支持下限（不承诺 0.1.x），同时不误伤 alpha.2 及之后的所有版本。**
 
-**结论**：保持不声明。**只有当真的用了某个版本才有的内核能力**（且旧版本会崩/白屏）时，
-才加 `engines.dsh`，范围写实际下限（如 `>=0.2.1-rc.1`），并按上表核对一遍。
+⚠️ 为什么是 `-0` 后缀而不是 `>=0.2.0`：按 semver 规则，`>=0.2.0` **不包含**
+`0.2.0-rc.1` / `0.2.0-rc.2` 这类 0.2.0 的预发布版。加 `-0` 下限后 `0.2.0-*` 全部放行，
+只拒绝 0.1.x 及更早 —— 这才是"表达下限、不误伤"的准确写法。
 
-⚠️ 顺带记两条 rc.2 相关事实：
-- **前端 seed 表从 9 项增至 11 项**（新增 `zod`、`@tanstack/react-virtual`）。
-  `SEED_MODULES` 不必跟着扩 —— **越窄越安全**，我们只用那 9 个。
-- seed 表里的函数名每次构建都会变，**按 `staticModules` 定位，不要 grep 函数名**。
+⚠️ 改这个范围是**破坏性**的：不满足的版本会在 profile 加载阶段被跳过（`skippedBundles`）
+或被启动 preflight 禁用。改完按上表核对一遍。
+
+**判断方法**：先问「有没有真的用到某个版本才有的内核能力」。
+有 → 声明并写实际下限；没有 → 仍建议声明一个保守下限（如 `>=0.2.0-0`），
+让用户知道支持边界，但**不要把下限抬到最新版**（那等于主动拒绝能用的旧版）。
 
 ## 4. 禁区（冻结实现，改了会让已验证功能失效）
 

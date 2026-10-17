@@ -37,7 +37,8 @@
     "locale"
   ],
   "engines": {
-    "node": "^22.19.0 || >=24.0.0"
+    "node": "^22.19.0 || >=24.0.0",
+    "dsh": ">=0.2.0-0"
   },
   "scripts": {
     "build": "node src/build-client.mjs",
